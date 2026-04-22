@@ -1,0 +1,83 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.2.0)'
+        required: false
+
+jobs:
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Update version.json
+        shell: python
+        run: |
+          import json, os, re
+          tag = os.environ.get('GITHUB_REF_NAME', 'v1.0.0').lstrip('v')
+          path = 'version.json'
+          with open(path) as f:
+              data = json.load(f)
+          data['app_version'] = tag
+          with open(path, 'w') as f:
+              json.dump(data, f, indent=2)
+
+      - name: Build executable
+        run: >
+          pyinstaller
+          --onefile
+          --windowed
+          --name MacroPad
+          --add-data "version.json;."
+          --hidden-import PyQt5.sip
+          --hidden-import serial.tools.list_ports
+          src/main.py
+
+      - name: Smoke test (headless)
+        run: dist\MacroPad.exe --version || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacroPad-windows
+          path: dist/MacroPad.exe
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MacroPad.exe
+          generate_release_notes: true
+          body: |
+            ## MacroPad Configurator ${{ github.ref_name }}
+
+            ### Kurulum
+            `MacroPad.exe` dosyasını indirip çalıştırın — kurulum gerekmez.
+
+            ### Gereksinimler
+            - Windows 10/11 (64-bit)
+            - ESP32-C3 sürücüsü: [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) veya [CH340](http://www.wch.cn/downloads/CH341SER_EXE.html)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
