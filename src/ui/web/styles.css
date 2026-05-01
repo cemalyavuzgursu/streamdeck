@@ -97,7 +97,8 @@ input, textarea, select { font-family: inherit; }
   font-size: 12.5px;
   padding: 4px 8px;
   color: var(--ink-2);
-  min-width: 130px;
+  min-width: 180px;
+  max-width: 260px;
 }
 .icon-btn {
   background: transparent;

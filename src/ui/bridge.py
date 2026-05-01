@@ -38,6 +38,10 @@ class Bridge(QObject):
     def list_ports(self) -> str:
         return json.dumps(DeviceManager.list_ports())
 
+    @pyqtSlot(result=str)
+    def list_ports_detailed(self) -> str:
+        return json.dumps(DeviceManager.list_ports_detailed())
+
     @pyqtSlot(str, result=bool)
     def connect_device(self, port: str) -> bool:
         try:
@@ -92,6 +96,14 @@ class Bridge(QObject):
         self._start_flash(port, bin_path=bin_path, from_github=False)
 
     def _start_flash(self, port: str, bin_path: Optional[str], from_github: bool) -> None:
+        if not port:
+            self.flash_done.emit(False, "Port seçilmedi.")
+            return
+        # esptool needs exclusive access; release the port before flashing.
+        try:
+            self._device.disconnect()
+        except Exception:
+            pass
         self._flasher = FirmwareFlasher(port=port, bin_path=bin_path, from_github=from_github)
         self._flasher.progress.connect(self.flash_log)
         self._flasher.log_line.connect(self.flash_log)

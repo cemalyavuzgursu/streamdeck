@@ -14,20 +14,34 @@ const bridge = window.MP_BRIDGE;
 // ───────── Topbar ─────────
 function Topbar({ onOpenFlash }) {
   const { state, setState, showToast, activeProfile } = useStore();
-  const [ports, setPorts] = useState([state.selectedPort]);
+  const [ports, setPorts] = useState([{ device: state.selectedPort, label: state.selectedPort, is_esp: false }]);
 
   const refreshPorts = useCallback(() => {
     if (!bridge) {
-      setPorts(['COM3', 'COM4', 'COM5', '/dev/ttyUSB0']);
+      setPorts([
+        { device: 'COM3', label: 'COM3', is_esp: false },
+        { device: 'COM4', label: 'COM4', is_esp: false },
+        { device: 'COM5', label: 'COM5 — ESP32-C3', is_esp: true },
+      ]);
       return;
     }
-    bridge.list_ports((result) => {
+    const handler = (result) => {
       const list = JSON.parse(result || '[]');
-      setPorts(list.length ? list : [state.selectedPort]);
-      if (list.length && !list.includes(state.selectedPort)) {
-        setState((s) => ({ ...s, selectedPort: list[0] }));
+      const normalised = list.map((p) =>
+        typeof p === 'string' ? { device: p, label: p, is_esp: false } : p
+      );
+      setPorts(normalised.length ? normalised : [{ device: state.selectedPort, label: state.selectedPort, is_esp: false }]);
+      // Auto-select the ESP32-C3 if found and current selection isn't one.
+      const esp = normalised.find((p) => p.is_esp);
+      const currentMatches = normalised.some((p) => p.device === state.selectedPort);
+      if (esp && !currentMatches) {
+        setState((s) => ({ ...s, selectedPort: esp.device }));
+      } else if (normalised.length && !currentMatches) {
+        setState((s) => ({ ...s, selectedPort: normalised[0].device }));
       }
-    });
+    };
+    if (bridge.list_ports_detailed) bridge.list_ports_detailed(handler);
+    else bridge.list_ports(handler);
   }, [setState, state.selectedPort]);
 
   useEffect(() => { refreshPorts(); }, [refreshPorts]);
@@ -87,7 +101,7 @@ function Topbar({ onOpenFlash }) {
       <div className="port-group">
         <select className="port-select" value={state.selectedPort}
           onChange={(e) => setState((s) => ({ ...s, selectedPort: e.target.value }))}>
-          {ports.map((p) => <option key={p} value={p}>{p}</option>)}
+          {ports.map((p) => <option key={p.device} value={p.device}>{p.label}</option>)}
         </select>
         <button className="icon-btn" title="Portları Tara" onClick={() => { refreshPorts(); showToast('Portlar tarandı'); }}>↻</button>
       </div>

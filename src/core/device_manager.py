@@ -43,7 +43,18 @@ class SerialWorker(QThread):
     def run(self):
         self._running = True
         try:
-            self._serial = serial.Serial(self._port, self._baud, timeout=0.1)
+            # Configure DTR/RTS BEFORE opening so the EN pin on ESP32 dev
+            # boards isn't pulsed by the open() call. Without this the
+            # chip reboots on every connect, USB re-enumerates, and the
+            # link drops in a loop.
+            self._serial = serial.Serial()
+            self._serial.port = self._port
+            self._serial.baudrate = self._baud
+            self._serial.timeout = 0.1
+            self._serial.dtr = False
+            self._serial.rts = False
+            self._serial.open()
+
             self.connection_changed.emit(True, self._port)
             self._send_raw({"cmd": "discover"})
 
@@ -142,6 +153,30 @@ class DeviceManager(QObject):
     @staticmethod
     def list_ports() -> List[str]:
         return [p.device for p in serial.tools.list_ports.comports()]
+
+    @staticmethod
+    def list_ports_detailed() -> list:
+        items = []
+        for p in serial.tools.list_ports.comports():
+            desc = (p.description or "").strip()
+            manufacturer = (p.manufacturer or "").strip()
+            blob = f"{desc} {manufacturer}".upper()
+            is_esp = (
+                getattr(p, "vid", None) == 0x303A  # Espressif native USB
+                or "ESP32" in blob
+                or "ESPRESSIF" in blob
+                or "CP210" in blob
+                or "CH340" in blob
+                or "CH9102" in blob
+            )
+            label = p.device
+            if is_esp:
+                label = f"{p.device} — ESP32-C3"
+            elif desc and desc.lower() != p.device.lower():
+                short = desc[:32]
+                label = f"{p.device} — {short}"
+            items.append({"device": p.device, "label": label, "is_esp": is_esp})
+        return items
 
     def connect(self, port: str):
         self.disconnect()
