@@ -1,4 +1,5 @@
 PyQt5>=5.15.9
+PyQtWebEngine>=5.15.6
 pyserial>=3.5
 requests>=2.31.0
 esptool>=4.7.0
