@@ -98,6 +98,16 @@ function Topbar({ onOpenFlash }) {
 
       <button className="btn ghost" onClick={onOpenFlash} title="Firmware Güncelle">⚡ Flash</button>
 
+      <button className="btn ghost" title="Uygulama güncellemelerini kontrol et"
+        onClick={() => {
+          if (window.MP_checkForUpdates) {
+            window.MP_checkForUpdates();
+            showToast('Güncellemeler kontrol ediliyor…');
+          } else {
+            showToast('Güncelleyici hazır değil');
+          }
+        }}>↻ Güncelle</button>
+
       <button className="btn accent" onClick={sendConfig} title="Konfigürasyonu cihaza gönder">
         ↑ Cihaza Gönder
       </button>
@@ -963,19 +973,56 @@ function DiscoveryWatcher() {
 }
 
 // ───────── Update banner ─────────
+window.MP_checkForUpdates = null;  // exposed so the topbar can re-trigger manually
+
 function UpdateWatcher() {
   const { showToast } = useStore();
   const [info, setInfo] = useState(null);
+  const manualRef = useRef(false);
 
   useEffect(() => {
     if (!bridge) return;
-    const onAvail = (version, url, notes) => setInfo({ version, url, notes });
-    if (bridge.update_available) bridge.update_available.connect(onAvail);
-    if (bridge.check_for_updates) bridge.check_for_updates();
-    return () => {
-      try { if (bridge.update_available) bridge.update_available.disconnect(onAvail); } catch {}
+    const onAvail = (version, url, notes) => {
+      console.log('[updater] available:', version, url);
+      setInfo({ version, url, notes });
     };
-  }, []);
+    const onNone = () => {
+      console.log('[updater] no update');
+      if (manualRef.current) showToast('Güncel sürümü kullanıyorsunuz');
+      manualRef.current = false;
+    };
+    const onErr = (msg) => {
+      console.warn('[updater] error:', msg);
+      showToast(`Güncelleme kontrolü başarısız: ${msg.slice(0, 60)}`);
+      manualRef.current = false;
+    };
+
+    if (bridge.update_available) bridge.update_available.connect(onAvail);
+    if (bridge.update_none) bridge.update_none.connect(onNone);
+    if (bridge.update_error) bridge.update_error.connect(onErr);
+
+    // Expose a manual trigger so the topbar button can ask for a re-check.
+    window.MP_checkForUpdates = () => {
+      manualRef.current = true;
+      if (bridge.check_for_updates) bridge.check_for_updates();
+    };
+
+    // Delay the auto-check by a beat so QWebChannel signal connections
+    // are fully wired up on the Python side before the request fires.
+    const t = setTimeout(() => {
+      if (bridge.check_for_updates) bridge.check_for_updates();
+    }, 1500);
+
+    return () => {
+      clearTimeout(t);
+      try {
+        if (bridge.update_available) bridge.update_available.disconnect(onAvail);
+        if (bridge.update_none) bridge.update_none.disconnect(onNone);
+        if (bridge.update_error) bridge.update_error.disconnect(onErr);
+      } catch {}
+      window.MP_checkForUpdates = null;
+    };
+  }, [showToast]);
 
   if (!info) return null;
   const apply = () => {

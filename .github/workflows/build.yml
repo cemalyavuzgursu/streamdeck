@@ -54,6 +54,8 @@ jobs:
           --name MacroPad
           --add-data "version.json;."
           --add-data "src/ui/web;src/ui/web"
+          --collect-all certifi
+          --collect-submodules requests
           --hidden-import PyQt5.sip
           --hidden-import PyQt5.QtWebEngineWidgets
           --hidden-import PyQt5.QtWebChannel

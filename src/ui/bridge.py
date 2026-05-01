@@ -16,6 +16,8 @@ class Bridge(QObject):
     flash_done = pyqtSignal(bool, str)
 
     update_available = pyqtSignal(str, str, str)  # version, url, notes
+    update_none = pyqtSignal()
+    update_error = pyqtSignal(str)
 
     modules_discovered = pyqtSignal(str)  # JSON string
 
@@ -26,6 +28,8 @@ class Bridge(QObject):
 
         self._updater = Updater(self)
         self._updater.update_available.connect(self.update_available)
+        self._updater.no_update.connect(self.update_none)
+        self._updater.error_occurred.connect(self.update_error)
 
         self._flasher: Optional[FirmwareFlasher] = None
 
