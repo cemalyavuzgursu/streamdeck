@@ -50,7 +50,10 @@ jobs:
           --windowed
           --name MacroPad
           --add-data "version.json;."
+          --add-data "src/ui/web;src/ui/web"
           --hidden-import PyQt5.sip
+          --hidden-import PyQt5.QtWebEngineWidgets
+          --hidden-import PyQt5.QtWebChannel
           --hidden-import serial.tools.list_ports
           src/main.py
 

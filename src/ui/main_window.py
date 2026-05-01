@@ -1,5 +1,6 @@
 """Main window: hosts the React/HTML UI inside a QWebEngineView and bridges
 it to the Python backend through QWebChannel."""
+import sys
 from pathlib import Path
 
 from PyQt5.QtCore import QUrl
@@ -11,7 +12,16 @@ from src.ui.bridge import Bridge
 from src.utils.constants import APP_NAME
 
 
-_WEB_DIR = Path(__file__).resolve().parent / "web"
+def _web_dir() -> Path:
+    # PyInstaller --onefile extracts bundled data to sys._MEIPASS at runtime.
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent))
+    bundled = base / "src" / "ui" / "web"
+    if bundled.is_dir():
+        return bundled
+    return Path(__file__).resolve().parent / "web"
+
+
+_WEB_DIR = _web_dir()
 
 
 class MainWindow(QMainWindow):
