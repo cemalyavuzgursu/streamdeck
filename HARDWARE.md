@@ -69,16 +69,19 @@ graph LR
 
 ### 2.3 Buton bağlantısı
 
+Ana modüldeki **6 buton kullanıcıya açık** — uygulamadan kısayol, medya kontrolü, makro veya profil değiştirme atayabilirsin.
+
 ```
-  GPIO 0..5 ────────┐
-                    │
-              ┌─────┴─────┐
-              │  Switch   │   (mavi mekanik)
-              └─────┬─────┘
-                    │
-                   GND
+  GPIO 0, 1, 3, 4, 10, 21 ──┐
+                             │
+                       ┌─────┴─────┐
+                       │  Switch   │   (mavi mekanik)
+                       └─────┬─────┘
+                             │
+                            GND
 
   Diyot gerekmez → her buton ayrı GPIO'da, matrix yok.
+  GPIO 9 BOOT butonudur, GPIO 2/8 strapping — bu pinleri kullanma.
 ```
 
 ### 2.4 I2C bağlantısı
