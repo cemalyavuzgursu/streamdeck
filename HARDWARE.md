@@ -51,19 +51,21 @@ graph LR
                     │                  │
               5V ── │ 5V          GND ─┤── GND
             3.3V ── │ 3V3                │
-            BTN1 ── │ GP0          GP10 │── (boş — yedek)
-            BTN2 ── │ GP1          GP9  │── SCL  → OLED, TCA9548A
-            BTN3 ── │ GP2          GP8  │── SDA  → OLED, TCA9548A
-            BTN4 ── │ GP3          GP7  │── (boş — encoder için yedek)
-            BTN5 ── │ GP4          GP6  │── INT  ← TCA9548A/MCP23017 interrupt hattı
-            BTN6 ── │ GP5          GP20 │── (boş)
-                    │              GP21 │── (boş)
+            BTN1 ── │ GP0          GP10 │── BTN5
+            BTN2 ── │ GP1          GP9  │── BOOT butonu (KULLANMA)
+                    │ GP2          GP8  │── (strapping — kullanma)
+            BTN3 ── │ GP3          GP7  │── INT (slave)
+            BTN4 ── │ GP4          GP6  │── SCL → OLED, TCA9548A
+             SDA ── │ GP5          GP20 │── (UART RX, boş)
+                    │              GP21 │── BTN6
                     └──────────────────┘
 ```
 
 **Önemli notlar:**
-- GP8 ve GP9 strapping pinleridir — boot anında HIGH olmalı. I2C pull-up'ları zaten bu görevi yapar.
-- Butonlar GPIO ile GND arasına bağlanır, içsel pull-up firmware'de `INPUT_PULLUP` ile etkin.
+- **GP9 BOOT butonudur** — kullanırsan boot sırasında istemeden download moduna girer. Boş bırak.
+- **GP2 ve GP8 strapping pinleridir** — boot anında HIGH olmalı, kullanma.
+- I2C için **GP5 (SDA) + GP6 (SCL)** kullan. Pull-up dirençler I2C hattında bir kere bulunur (genelde OLED breakout'unda zaten var).
+- Butonlar GPIO ile GND arasına bağlanır, firmware'de `INPUT_PULLUP` ile içsel pull-up etkin.
 
 ### 2.3 Buton bağlantısı
 

@@ -31,6 +31,11 @@ pyinstaller --onefile --windowed --name MacroPad src/main.py
 # dist/MacroPad.exe hazır
 ```
 
+## Donanım & Firmware
+
+- **Donanım şemaları, BOM, pin map**: [`HARDWARE.md`](./HARDWARE.md)
+- **ESP32-C3 firmware (Arduino sketch + yükleme talimatları)**: [`firmware/`](./firmware/)
+
 ## Dizin Yapısı
 
 ```
