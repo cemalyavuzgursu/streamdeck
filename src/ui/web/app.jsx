@@ -897,6 +897,71 @@ function Footer() {
   );
 }
 
+// ───────── Module discovery watcher ─────────
+// Listens for modules reported by the firmware and merges them into the
+// active profile, preserving any existing button/encoder assignments that
+// match by module_id. Modules in the profile that aren't in the discovery
+// (e.g. unplugged slaves) are kept so offline-configured profiles aren't
+// destroyed when the user connects different hardware.
+function DiscoveryWatcher() {
+  const { setState, showToast } = useStore();
+
+  useEffect(() => {
+    if (!bridge || !bridge.modules_discovered) return;
+
+    const onDiscovered = (jsonStr) => {
+      let discovered;
+      try { discovered = JSON.parse(jsonStr || '[]'); }
+      catch { return; }
+      if (!Array.isArray(discovered) || !discovered.length) return;
+
+      setState((s) => {
+        const profiles = s.profiles.map((p) => {
+          if (p.id !== s.activeProfileId) return p;
+
+          const byId = new Map(p.modules.map((m) => [m.module_id, m]));
+          const seen = new Set();
+
+          const merged = discovered.map((d) => {
+            seen.add(d.module_id);
+            const old = byId.get(d.module_id);
+            const fresh = window.MP.newModule({
+              module_id: d.module_id,
+              module_type: d.module_type || 'slave',
+              name: (old && old.name) || d.name || (d.module_type === 'main' ? 'Ana Modül' : 'Modül'),
+              button_count: d.button_count || 0,
+              encoder_count: d.encoder_count || 0,
+              has_display: !!d.has_display,
+            });
+            if (!old) return fresh;
+
+            const bN = Math.min(old.buttons.length, fresh.buttons.length);
+            for (let i = 0; i < bN; i++) fresh.buttons[i] = old.buttons[i];
+            const eN = Math.min(old.encoders.length, fresh.encoders.length);
+            for (let i = 0; i < eN; i++) fresh.encoders[i] = old.encoders[i];
+            fresh.display_mode = old.display_mode;
+            fresh.display_custom_text = old.display_custom_text;
+            return fresh;
+          });
+
+          const surviving = p.modules.filter((m) => !seen.has(m.module_id));
+          return { ...p, modules: [...merged, ...surviving] };
+        });
+        return { ...s, profiles };
+      });
+
+      showToast(`${discovered.length} modül algılandı`);
+    };
+
+    bridge.modules_discovered.connect(onDiscovered);
+    return () => {
+      try { bridge.modules_discovered.disconnect(onDiscovered); } catch {}
+    };
+  }, [setState, showToast]);
+
+  return null;
+}
+
 // ───────── Update banner ─────────
 function UpdateWatcher() {
   const { showToast } = useStore();
@@ -945,6 +1010,7 @@ function App() {
       {showFlash && <FlashModal onClose={() => setShowFlash(false)} />}
       {toast && <div className="toast">{toast}</div>}
       <UpdateWatcher />
+      <DiscoveryWatcher />
     </div>
   );
 }
