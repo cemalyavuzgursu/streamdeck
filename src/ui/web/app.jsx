@@ -921,6 +921,53 @@ function Footer() {
   );
 }
 
+// ───────── Active profile cache + remote button events ─────────
+// ESP32-C3 can't act as a USB-HID device, so the firmware just sends
+// raw button_event JSON over CDC. The Python bridge looks up the
+// configured action in the active profile and executes it locally.
+// We need to keep the bridge's lookup table in sync with whatever the
+// user is editing — this component handles both halves of that.
+function ActionRouter() {
+  const { state, setState, activeProfile, showToast } = useStore();
+
+  // Keep the bridge's cached profile in sync with the active one so
+  // button presses dispatch even before the user hits "Cihaza Gönder".
+  useEffect(() => {
+    if (!bridge || !bridge.cache_profile || !activeProfile) return;
+    bridge.cache_profile(JSON.stringify(activeProfile));
+  }, [activeProfile]);
+
+  // profile_switch_requested fires when a physical button is mapped to
+  // ACTION_PROFILE_SWITCH and gets pressed.
+  useEffect(() => {
+    if (!bridge || !bridge.profile_switch_requested) return;
+    const onSwitch = (targetId) => {
+      setState((s) => {
+        if (!s.profiles.find((p) => p.id === targetId)) return s;
+        return { ...s, activeProfileId: targetId, selection: null };
+      });
+    };
+    bridge.profile_switch_requested.connect(onSwitch);
+    return () => {
+      try { bridge.profile_switch_requested.disconnect(onSwitch); } catch {}
+    };
+  }, [setState]);
+
+  // Light feedback so the user knows a press actually did something.
+  useEffect(() => {
+    if (!bridge || !bridge.action_executed) return;
+    const onExec = (type, status) => {
+      console.log('[action]', type, status);
+    };
+    bridge.action_executed.connect(onExec);
+    return () => {
+      try { bridge.action_executed.disconnect(onExec); } catch {}
+    };
+  }, []);
+
+  return null;
+}
+
 // ───────── Module discovery watcher ─────────
 // Listens for modules reported by the firmware and merges them into the
 // active profile, preserving any existing button/encoder assignments that
@@ -1072,6 +1119,7 @@ function App() {
       {toast && <div className="toast">{toast}</div>}
       <UpdateWatcher />
       <DiscoveryWatcher />
+      <ActionRouter />
     </div>
   );
 }

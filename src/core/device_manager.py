@@ -125,6 +125,7 @@ class DeviceManager(QObject):
     modules_updated = pyqtSignal(list)           # List[ModuleInfo]
     error_occurred = pyqtSignal(str)
     config_sent = pyqtSignal()
+    message_received = pyqtSignal(dict)          # any non-modules JSON line
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -184,6 +185,7 @@ class DeviceManager(QObject):
         self._worker.modules_discovered.connect(self._on_modules_discovered)
         self._worker.connection_changed.connect(self._on_connection_changed)
         self._worker.error_occurred.connect(self.error_occurred)
+        self._worker.message_received.connect(self.message_received)
         self._worker.start()
 
     def disconnect(self):

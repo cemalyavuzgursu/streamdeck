@@ -28,12 +28,12 @@ ESP32-C3 Super Mini'yi USB-C ile bağla, sonra Tools menüsünden:
 |---|---|
 | Board | **ESP32C3 Dev Module** |
 | USB CDC On Boot | **Enabled** |
-| USB Mode | **USB-OTG (TinyUSB)** |
-| Upload Mode | **USB-OTG CDC (TinyUSB)** |
 | CPU Frequency | 160 MHz |
 | Flash Size | 4MB |
 | Partition Scheme | Default 4MB with spiffs |
 | Port | Liste açıldığında **COMx — ESP32-C3** olarak gözüken port |
+
+> **Not:** ESP32-C3'ün USB peripheral'ı sadece CDC destekliyor (USB Serial/JTAG controller), USB-HID yok. Bu yüzden firmware HID kütüphaneleri kullanmaz — buton olaylarını PC'ye JSON olarak yollar, klavye basışı/uygulama açma vb. işleri PC tarafındaki MacroPad uygulaması yapar.
 
 > Eğer port görünmüyorsa: BOOT butonunu basılı tutarken USB'yi tak (yeşil LED yanıyorsa hâlâ basılı tut), sonra IDE'de port listesini yenile.
 

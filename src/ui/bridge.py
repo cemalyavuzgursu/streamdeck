@@ -1,10 +1,11 @@
 """QWebChannel bridge between the React/HTML UI and the Python backend."""
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QFileDialog
 
+from src.core.action_executor import ActionExecutor
 from src.core.device_manager import DeviceManager
 from src.core.firmware_flasher import FirmwareFlasher
 from src.core.updater import Updater
@@ -21,10 +22,18 @@ class Bridge(QObject):
 
     modules_discovered = pyqtSignal(str)  # JSON string
 
+    # Fired when the device reports a button press whose action is
+    # "profile_switch" — JS catches this and changes activeProfileId.
+    profile_switch_requested = pyqtSignal(str)  # target profile_id
+
+    # Visible feedback for action execution (logged in JS console + toast).
+    action_executed = pyqtSignal(str, str)  # action_type, status
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._device = DeviceManager(self)
         self._device.modules_updated.connect(self._on_modules_updated)
+        self._device.message_received.connect(self._on_device_message)
 
         self._updater = Updater(self)
         self._updater.update_available.connect(self.update_available)
@@ -32,6 +41,37 @@ class Bridge(QObject):
         self._updater.error_occurred.connect(self.update_error)
 
         self._flasher: Optional[FirmwareFlasher] = None
+        self._executor = ActionExecutor()
+        self._cached_profile: Optional[Dict[str, Any]] = None
+
+    def _on_device_message(self, msg: dict) -> None:
+        """Dispatch incoming JSON messages from the firmware."""
+        if msg.get("type") == "button_event" and msg.get("pressed"):
+            self._handle_button_press(
+                str(msg.get("module_id", "")),
+                int(msg.get("index", -1)),
+            )
+
+    def _handle_button_press(self, module_id: str, index: int) -> None:
+        if not self._cached_profile or index < 0:
+            return
+        for mod in self._cached_profile.get("modules", []):
+            if str(mod.get("module_id", "")) != module_id:
+                continue
+            buttons = mod.get("buttons", [])
+            if 0 <= index < len(buttons):
+                btn = buttons[index] or {}
+                action_type = btn.get("action_type", "none")
+                action_data = btn.get("action_data", {}) or {}
+                if action_type == "profile_switch":
+                    target = str(action_data.get("profile_id", ""))
+                    if target:
+                        self.profile_switch_requested.emit(target)
+                    self.action_executed.emit(action_type, f"switch → {target}")
+                else:
+                    status = self._executor.execute(action_type, action_data)
+                    self.action_executed.emit(action_type, status)
+            return
 
     # ─────────────── Ports / Device ───────────────
     @pyqtSlot(result=str)
@@ -55,12 +95,24 @@ class Bridge(QObject):
         self._device.disconnect()
         return True
 
+    @pyqtSlot(str)
+    def cache_profile(self, profile_json: str) -> None:
+        """Update the local action lookup table without touching the device."""
+        try:
+            self._cached_profile = json.loads(profile_json)
+        except json.JSONDecodeError:
+            pass
+
     @pyqtSlot(str, result=bool)
     def send_config(self, profile_json: str) -> bool:
         try:
             profile = json.loads(profile_json)
         except json.JSONDecodeError:
             return False
+        # Keep a copy locally — the firmware doesn't run actions itself
+        # (ESP32-C3 has no USB HID), so we look up bindings here when
+        # a button_event arrives.
+        self._cached_profile = profile
         payload = {
             "cmd": "config",
             "profile_name": profile.get("name", ""),
