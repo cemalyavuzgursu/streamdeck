@@ -118,9 +118,21 @@ class UpdateDownloader(QThread):
             import requests
             import os
 
+            # HEAD first — gives us the authoritative expected size up
+            # front, independent of any quirks with the streamed response.
+            try:
+                head = requests.head(self._url, allow_redirects=True, timeout=8)
+                expected = int(head.headers.get("content-length", 0))
+            except Exception:
+                expected = 0
+
             resp = requests.get(self._url, stream=True, timeout=60)
             resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
+            stream_total = int(resp.headers.get("content-length", 0))
+            # Prefer the HEAD value; fall back to the streamed header
+            # if we couldn't get one earlier.
+            total = expected or stream_total
+
             suffix = ".exe" if ".exe" in self._url else ".bin"
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
@@ -132,24 +144,26 @@ class UpdateDownloader(QThread):
                     if total:
                         self.progress.emit(int(downloaded * 100 / total))
 
-            # Integrity guard — silent partial downloads (network drop,
-            # stream reset) used to slip through and overwrite the
-            # working install with a truncated exe, leaving the user
-            # with the classic "Failed to load Python DLL" on launch.
             actual = os.path.getsize(tmp_path)
+
+            def _abort(msg: str) -> None:
+                try: os.unlink(tmp_path)
+                except OSError: pass
+                self.error_occurred.emit(msg)
+
+            # Strict size match — if we have a Content-Length, downloaded
+            # bytes MUST equal it. No partial downloads ever reach
+            # apply_update again.
             if total and actual != total:
-                try: os.unlink(tmp_path)
-                except OSError: pass
-                self.error_occurred.emit(
-                    f"İndirme yarım kaldı: {actual}/{total} bayt. Tekrar deneyin."
-                )
+                _abort(f"İndirme yarım kaldı: {actual:,}/{total:,} bayt. Tekrar deneyin.")
                 return
-            if suffix == ".exe" and actual < 50_000_000:
-                try: os.unlink(tmp_path)
-                except OSError: pass
-                self.error_occurred.emit(
-                    f"İndirilen dosya çok küçük ({actual} bayt) — bozuk olabilir."
-                )
+
+            # Hard floor for exe — current builds are ~120MB. Anything
+            # under 100MB is suspect, regardless of what Content-Length
+            # said. Prevents bricking on edge cases where Content-Length
+            # is wrong or missing.
+            if suffix == ".exe" and actual < 100_000_000:
+                _abort(f"İndirilen .exe çok küçük ({actual:,} bayt) — bozuk olabilir.")
                 return
 
             self.progress.emit(100)
@@ -192,10 +206,12 @@ class Updater(QObject):
 
         # Sanity check the download. A real MacroPad.exe sits at ~120MB
         # since it bundles PyQt5 + WebEngine + Python runtime; anything
-        # under 50MB is almost certainly truncated and would brick the
-        # install with "Failed to load Python DLL".
+        # under 100MB is almost certainly truncated and would brick the
+        # install with "Failed to load Python DLL". The downloader's
+        # own check is the primary line of defence; this is a safety
+        # net in case apply_update gets called with a bad path.
         try:
-            if not os.path.exists(new_exe_path) or os.path.getsize(new_exe_path) < 50_000_000:
+            if not os.path.exists(new_exe_path) or os.path.getsize(new_exe_path) < 100_000_000:
                 return
         except OSError:
             return
@@ -218,6 +234,19 @@ class Updater(QObject):
             f'set "NEW_FILE={new_exe_path}"\n'
             f'set "CUR_FILE={current_exe}"\n'
             "set RETRIES=20\n"
+            "\n"
+            ":: Final sanity check inside the bat — defence in depth.\n"
+            ":: PyInstaller exe is ~120MB; anything under 100MB is bogus.\n"
+            'for %%I in ("%NEW_FILE%") do set NEWSIZE=%%~zI\n'
+            "if %NEWSIZE% LSS 100000000 (\n"
+            "  echo.\n"
+            "  echo HATA: Indirilen dosya cok kucuk (%NEWSIZE% bayt^).\n"
+            "  echo Mevcut surume dokunulmadi. Manuel olarak indirin:\n"
+            "  echo   https://github.com/cemalyavuzgursu/streamdeck/releases\n"
+            "  echo.\n"
+            "  pause >nul\n"
+            "  exit /b 1\n"
+            ")\n"
             "\n"
             ":retry\n"
             'copy /y /b "%NEW_FILE%" "%CUR_FILE%" >nul 2>&1\n'
