@@ -1015,7 +1015,31 @@ function DiscoveryWatcher() {
             return fresh;
           });
 
-          const surviving = p.modules.filter((m) => !seen.has(m.module_id));
+          // Drop modules whose IDs the firmware didn't report. There's
+          // only ever one main module on a device, so any pre-existing
+          // 'main' that didn't match the discovered one is a stale
+          // default from before the user connected real hardware —
+          // remove it unconditionally (otherwise the user ends up with
+          // two "Ana Modül" cards and edits the wrong one).
+          // Slave modules without a matching ID may be intentionally
+          // configured offline, so we keep those if they have any
+          // assigned actions.
+          const discoveredHasMain = discovered.some((d) => d.module_type === 'main');
+          const surviving = p.modules.filter((m) => {
+            if (seen.has(m.module_id)) return false;
+            if (discoveredHasMain && m.module_type === 'main') return false;
+            const hasButtonAction = (m.buttons || []).some(
+              (b) => b && (b.action_type !== 'none' || b.label)
+            );
+            const hasEncoderAction = (m.encoders || []).some(
+              (e) => e && (
+                (e.cw && e.cw.action_type !== 'none') ||
+                (e.ccw && e.ccw.action_type !== 'none') ||
+                (e.push && e.push.action_type !== 'none')
+              )
+            );
+            return hasButtonAction || hasEncoderAction;
+          });
           return { ...p, modules: [...merged, ...surviving] };
         });
         return { ...s, profiles };
