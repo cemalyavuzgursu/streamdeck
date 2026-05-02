@@ -46,29 +46,6 @@ function Topbar({ onOpenFlash }) {
 
   useEffect(() => { refreshPorts(); }, [refreshPorts]);
 
-  const toggleConnect = () => {
-    if (!bridge) {
-      setState((s) => ({ ...s, connected: !s.connected }));
-      showToast(state.connected ? 'Bağlantı kesildi' : `Bağlandı: ${state.selectedPort}`);
-      return;
-    }
-    if (state.connected) {
-      bridge.disconnect_device(() => {
-        setState((s) => ({ ...s, connected: false }));
-        showToast('Bağlantı kesildi');
-      });
-    } else {
-      bridge.connect_device(state.selectedPort, (ok) => {
-        if (ok) {
-          setState((s) => ({ ...s, connected: true }));
-          showToast(`Bağlandı: ${state.selectedPort}`);
-        } else {
-          showToast(`Bağlantı başarısız: ${state.selectedPort}`);
-        }
-      });
-    }
-  };
-
   const sendConfig = () => {
     if (!state.connected) return showToast('Cihaz bağlı değil');
     if (!activeProfile) return;
@@ -114,10 +91,6 @@ function Topbar({ onOpenFlash }) {
         </select>
         <button className="icon-btn" title="Portları Tara" onClick={() => { refreshPorts(); showToast('Portlar tarandı'); }}>↻</button>
       </div>
-
-      <button className={`btn ${state.connected ? '' : 'primary'}`} onClick={toggleConnect}>
-        {state.connected ? 'Bağlantıyı Kes' : 'Bağlan'}
-      </button>
 
       <button className="btn ghost" onClick={onOpenFlash} title="Firmware Güncelle">⚡ Flash</button>
 
@@ -930,6 +903,31 @@ function Footer() {
   );
 }
 
+// ───────── Connection state mirror ─────────
+// Bridge owns the actual serial state (auto-connect, retry, etc.);
+// this component just mirrors it into React state so the status pill
+// and "Cihaza Gönder" button can react.
+function ConnectionWatcher() {
+  const { setState } = useStore();
+
+  useEffect(() => {
+    if (!bridge || !bridge.device_connection_changed) return;
+    const onChange = (connected, port) => {
+      setState((s) => ({
+        ...s,
+        connected: !!connected,
+        selectedPort: port || s.selectedPort,
+      }));
+    };
+    bridge.device_connection_changed.connect(onChange);
+    return () => {
+      try { bridge.device_connection_changed.disconnect(onChange); } catch {}
+    };
+  }, [setState]);
+
+  return null;
+}
+
 // ───────── Active profile cache + remote button events ─────────
 // ESP32-C3 can't act as a USB-HID device, so the firmware just sends
 // raw button_event JSON over CDC. The Python bridge looks up the
@@ -1160,6 +1158,7 @@ function App() {
       <UpdateWatcher />
       <DiscoveryWatcher />
       <ActionRouter />
+      <ConnectionWatcher />
     </div>
   );
 }

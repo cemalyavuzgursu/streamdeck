@@ -48,13 +48,6 @@ bool btnState[BTN_COUNT] = {false};
 unsigned long btnDebounce[BTN_COUNT] = {0};
 constexpr unsigned long DEBOUNCE_MS = 30;
 unsigned long lastDraw = 0;
-unsigned long lastRx = 0;          // millis() when last JSON command arrived
-uint16_t      rxCount = 0;         // total commands received since boot
-String        lastCmd = "-";       // last cmd field successfully parsed
-String        lastErr = "";        // last parse error (truncated)
-String        lastRaw = "";        // first 30 chars of last bad input
-String        lastCfgInfo = "";    // diagnostic: what handleConfig saw
-uint16_t      lastLineLen = 0;     // length of last received line
 
 // ─────────────── OLED ───────────────
 void drawClock() {
@@ -76,16 +69,9 @@ void drawProfile() {
   oled.setFont(u8g2_font_helvB14_tf);
   int w = oled.getStrWidth(profileName.c_str());
   if (w > 124) w = 124;
-  oled.drawStr((128 - w) / 2, 32, profileName.c_str());
-  oled.setFont(u8g2_font_4x6_tf);
-  String l1 = String("mode=") + displayMode + " last=" + lastCmd + " len=" + String(lastLineLen);
-  oled.drawStr(2, 46, l1.c_str());
-  String l2 = lastCfgInfo.length() ? lastCfgInfo : String("USB connected");
-  oled.drawStr(2, 54, l2.c_str());
-  if (lastErr.length()) {
-    String l3 = String("err:") + lastErr + " " + lastRaw;
-    oled.drawStr(2, 62, l3.substring(0, 32).c_str());
-  }
+  oled.drawStr((128 - w) / 2, 40, profileName.c_str());
+  oled.setFont(u8g2_font_5x7_tf);
+  oled.drawStr(2, 60, "USB connected");
 }
 
 void drawVolume() {
@@ -125,27 +111,11 @@ void drawCustom() {
   }
 }
 
-void drawRxIndicator() {
-  // Top-right corner: solid dot for ~300ms after each received command,
-  // plus a tiny RX counter in the corner. If you press "Cihaza Gönder"
-  // and nothing changes here, the firmware never received the message.
-  if (millis() - lastRx < 300) {
-    oled.drawDisc(122, 4, 3);
-  } else {
-    oled.drawCircle(122, 4, 3);
-  }
-  oled.setFont(u8g2_font_4x6_tf);
-  String c = "RX " + String(rxCount);
-  int w = oled.getStrWidth(c.c_str());
-  oled.drawStr(115 - w, 7, c.c_str());
-}
-
 void drawScreen() {
   if (displayMode == MODE_CLOCK)        drawClock();
   else if (displayMode == MODE_VOLUME)  drawVolume();
   else if (displayMode == MODE_CUSTOM)  drawCustom();
   else                                  drawProfile();
-  drawRxIndicator();
   oled.sendBuffer();
   lastDraw = millis();
 }
@@ -192,10 +162,8 @@ void sendButtonEvent(int idx, bool pressed) {
 void handleDisplay(JsonVariant root) {
   profileName = String((const char*)(root["profile_name"] | "Profil"));
   String newMode = String((const char*)(root["display_mode"] | ""));
-  String parsedMode = newMode.length() ? newMode : "(empty)";
   if (newMode.length()) displayMode = newMode;
   customText = String((const char*)(root["display_custom_text"] | ""));
-  lastCfgInfo = String("disp m=") + parsedMode;
   drawScreen();
 }
 
@@ -215,30 +183,13 @@ void handleVolume(JsonVariant root) {
 DynamicJsonDocument g_doc(8192);
 
 void handleLine(const char* line, size_t len) {
-  lastLineLen = len;
   g_doc.clear();
-  DeserializationError err = deserializeJson(g_doc, line, len);
-  if (err) {
-    lastErr = String(err.c_str()).substring(0, 12);
-    // Keep both head and tail of the bad line — lets us see if the
-    // start was junk (USB enumeration noise) or the end was truncated.
-    String l(line);
-    if (l.length() > 30) lastRaw = l.substring(0, 16) + "..." + l.substring(l.length() - 8);
-    else lastRaw = l;
-    drawScreen();
-    return;
-  }
-  lastErr = "";
-  lastRaw = "";
+  if (deserializeJson(g_doc, line, len) != DeserializationError::Ok) return;
   String cmd = String((const char*)(g_doc["cmd"] | ""));
-  lastCmd = cmd;
-  lastRx = millis();
-  rxCount++;
   if      (cmd == "discover") sendModules();
   else if (cmd == "display")  handleDisplay(g_doc.as<JsonVariant>());
   else if (cmd == "clock")    handleClock(g_doc.as<JsonVariant>());
   else if (cmd == "volume")   handleVolume(g_doc.as<JsonVariant>());
-  drawScreen();
 }
 
 // ─────────────── Setup / Loop ───────────────
@@ -277,9 +228,6 @@ void loop() {
     } else {
       // Overflow — discard the line and reset so we can recover.
       lineLen = 0;
-      lastErr = "Overflow";
-      lastRaw = "";
-      drawScreen();
     }
   }
 
@@ -295,11 +243,7 @@ void loop() {
   }
 
   // Saat modunda dakika değişimi yakalamak için ekranı 5 saniyede bir çiz.
-  // Ayrıca RX dot'unun sönmesini sağlamak için son komuttan ~400ms sonra
-  // bir ekstra çizim yap.
   if (displayMode == MODE_CLOCK && (now - lastDraw) > 5000) {
-    drawScreen();
-  } else if (lastRx && (now - lastRx) > 350 && (now - lastDraw) > 350) {
     drawScreen();
   }
 

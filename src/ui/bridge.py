@@ -1,6 +1,7 @@
 """QWebChannel bridge between the React/HTML UI and the Python backend."""
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
@@ -10,6 +11,10 @@ from src.core.action_executor import ActionExecutor
 from src.core.device_manager import DeviceManager
 from src.core.firmware_flasher import FirmwareFlasher
 from src.core.updater import Updater
+from src.utils.constants import APPDATA_DIR
+
+
+_LAST_CONFIG_PATH = APPDATA_DIR / "last_config.json"
 
 
 class Bridge(QObject):
@@ -30,6 +35,10 @@ class Bridge(QObject):
     # Visible feedback for action execution (logged in JS console + toast).
     action_executed = pyqtSignal(str, str)  # action_type, status
 
+    # Auto-connect status pushed to JS so the topbar can render
+    # "Bağlı" / "Bağlı değil" without polling.
+    device_connection_changed = pyqtSignal(bool, str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._device = DeviceManager(self)
@@ -43,7 +52,8 @@ class Bridge(QObject):
 
         self._flasher: Optional[FirmwareFlasher] = None
         self._executor = ActionExecutor()
-        self._cached_profile: Optional[Dict[str, Any]] = None
+        self._cached_profile: Optional[Dict[str, Any]] = self._load_last_config()
+        self._auto_disabled_port: str = ""  # set when user manually disconnects
 
         # The firmware has no RTC, so we push the current wall-clock time
         # every 30s. The OLED only redraws if it's in CLOCK mode.
@@ -51,10 +61,80 @@ class Bridge(QObject):
         self._clock_timer.setInterval(30_000)
         self._clock_timer.timeout.connect(self._push_clock)
         self._clock_timer.start()
-        # Also push immediately when a connection completes.
-        self._device.connection_changed.connect(
-            lambda connected, _port: self._push_clock() if connected else None
+
+        # On every successful connect: push clock + replay the last config
+        # we sent so the OLED comes back to whatever the user had last,
+        # even after a power-cycle of the device or a fresh app launch.
+        self._device.connection_changed.connect(self._on_connection_changed)
+
+        # Auto-connect: scan every 2s for a likely-ESP port and connect
+        # to it if we're not already connected (and the user hasn't
+        # manually disconnected from it).
+        self._auto_connect_timer = QTimer(self)
+        self._auto_connect_timer.setInterval(2_000)
+        self._auto_connect_timer.timeout.connect(self._try_auto_connect)
+        self._auto_connect_timer.start()
+        # Run once immediately so the device picks up on app launch
+        # without waiting two seconds.
+        QTimer.singleShot(500, self._try_auto_connect)
+
+    # ─────────────── Auto-connect / persistence ───────────────
+    def _load_last_config(self) -> Optional[Dict[str, Any]]:
+        try:
+            if _LAST_CONFIG_PATH.exists():
+                with open(_LAST_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return None
+
+    def _save_last_config(self) -> None:
+        if not self._cached_profile:
+            return
+        try:
+            APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+            with open(_LAST_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self._cached_profile, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _try_auto_connect(self) -> None:
+        if self._device.is_connected:
+            return
+        for p in DeviceManager.list_ports_detailed():
+            if p.get("is_esp") and p.get("device") != self._auto_disabled_port:
+                try:
+                    self._device.connect(p["device"])
+                except Exception:
+                    pass
+                return
+
+    def _on_connection_changed(self, connected: bool, port: str) -> None:
+        # Always notify JS so the topbar reflects the current state.
+        self.device_connection_changed.emit(connected, port)
+        if not connected:
+            return
+        # Re-arm side state so a power-cycle resends the last config.
+        QTimer.singleShot(800, self._push_clock)
+        QTimer.singleShot(900, self._resend_cached_config)
+
+    def _resend_cached_config(self) -> None:
+        if not self._cached_profile or not self._device.is_connected:
+            return
+        main_mod = next(
+            (m for m in self._cached_profile.get("modules", [])
+             if (m or {}).get("module_type") == "main"),
+            {},
         )
+        try:
+            self._device.send_config({
+                "cmd": "display",
+                "profile_name": self._cached_profile.get("name", ""),
+                "display_mode": main_mod.get("display_mode", "profile_name"),
+                "display_custom_text": main_mod.get("display_custom_text", ""),
+            })
+        except Exception:
+            pass
 
     def _push_clock(self) -> None:
         if not self._device.is_connected:
@@ -109,6 +189,9 @@ class Bridge(QObject):
 
     @pyqtSlot(str, result=bool)
     def connect_device(self, port: str) -> bool:
+        # Manual connect re-arms auto-connect for that port.
+        if self._auto_disabled_port == port:
+            self._auto_disabled_port = ""
         try:
             self._device.connect(port)
             return True
@@ -117,6 +200,10 @@ class Bridge(QObject):
 
     @pyqtSlot(result=bool)
     def disconnect_device(self) -> bool:
+        # Disable auto-connect for the current port until the user
+        # manually reconnects — otherwise we'd immediately reconnect
+        # right after the user clicked disconnect.
+        self._auto_disabled_port = self._device.current_port or ""
         self._device.disconnect()
         return True
 
@@ -125,6 +212,7 @@ class Bridge(QObject):
         """Update the local action lookup table without touching the device."""
         try:
             self._cached_profile = json.loads(profile_json)
+            self._save_last_config()
         except json.JSONDecodeError:
             pass
 
@@ -136,8 +224,11 @@ class Bridge(QObject):
             return False
         # Keep a copy locally — the firmware doesn't run actions itself
         # (ESP32-C3 has no USB HID), so we look up bindings here when
-        # a button_event arrives.
+        # a button_event arrives. Persist to disk so a fresh app launch
+        # or device replug restores the previous OLED state without the
+        # user having to click "Cihaza Gönder" again.
         self._cached_profile = profile
+        self._save_last_config()
 
         # The firmware only needs OLED data: profile name, mode, custom
         # text. Sending the full module/buttons/encoders array as JSON
