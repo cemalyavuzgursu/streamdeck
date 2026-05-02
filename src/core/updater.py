@@ -116,6 +116,7 @@ class UpdateDownloader(QThread):
     def run(self):
         try:
             import requests
+            import os
 
             resp = requests.get(self._url, stream=True, timeout=60)
             resp.raise_for_status()
@@ -130,6 +131,27 @@ class UpdateDownloader(QThread):
                     downloaded += len(chunk)
                     if total:
                         self.progress.emit(int(downloaded * 100 / total))
+
+            # Integrity guard — silent partial downloads (network drop,
+            # stream reset) used to slip through and overwrite the
+            # working install with a truncated exe, leaving the user
+            # with the classic "Failed to load Python DLL" on launch.
+            actual = os.path.getsize(tmp_path)
+            if total and actual != total:
+                try: os.unlink(tmp_path)
+                except OSError: pass
+                self.error_occurred.emit(
+                    f"İndirme yarım kaldı: {actual}/{total} bayt. Tekrar deneyin."
+                )
+                return
+            if suffix == ".exe" and actual < 50_000_000:
+                try: os.unlink(tmp_path)
+                except OSError: pass
+                self.error_occurred.emit(
+                    f"İndirilen dosya çok küçük ({actual} bayt) — bozuk olabilir."
+                )
+                return
+
             self.progress.emit(100)
             self.finished.emit(tmp_path)
         except Exception as e:
@@ -168,9 +190,12 @@ class Updater(QObject):
         if not getattr(sys, "frozen", False):
             return  # Running from source, skip
 
-        # Sanity check the download — anything under 10MB isn't our exe.
+        # Sanity check the download. A real MacroPad.exe sits at ~120MB
+        # since it bundles PyQt5 + WebEngine + Python runtime; anything
+        # under 50MB is almost certainly truncated and would brick the
+        # install with "Failed to load Python DLL".
         try:
-            if not os.path.exists(new_exe_path) or os.path.getsize(new_exe_path) < 10_000_000:
+            if not os.path.exists(new_exe_path) or os.path.getsize(new_exe_path) < 50_000_000:
                 return
         except OSError:
             return
