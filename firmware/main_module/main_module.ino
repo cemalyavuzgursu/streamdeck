@@ -53,6 +53,8 @@ uint16_t      rxCount = 0;         // total commands received since boot
 String        lastCmd = "-";       // last cmd field successfully parsed
 String        lastErr = "";        // last parse error (truncated)
 String        lastRaw = "";        // first 30 chars of last bad input
+String        lastCfgInfo = "";    // diagnostic: what handleConfig saw
+uint16_t      lastLineLen = 0;     // length of last received line
 
 // ─────────────── OLED ───────────────
 void drawClock() {
@@ -74,17 +76,15 @@ void drawProfile() {
   oled.setFont(u8g2_font_helvB14_tf);
   int w = oled.getStrWidth(profileName.c_str());
   if (w > 124) w = 124;
-  oled.drawStr((128 - w) / 2, 36, profileName.c_str());
+  oled.drawStr((128 - w) / 2, 32, profileName.c_str());
   oled.setFont(u8g2_font_4x6_tf);
-  // DEBUG: parsed display_mode + last received cmd + first chars of
-  // any invalid line. Tells us at a glance which message broke.
-  String l1 = String("mode=") + displayMode + "  last=" + lastCmd;
-  oled.drawStr(2, 50, l1.c_str());
+  String l1 = String("mode=") + displayMode + " last=" + lastCmd + " len=" + String(lastLineLen);
+  oled.drawStr(2, 46, l1.c_str());
+  String l2 = lastCfgInfo.length() ? lastCfgInfo : String("USB connected");
+  oled.drawStr(2, 54, l2.c_str());
   if (lastErr.length()) {
-    String l2 = String("err:") + lastErr + " " + lastRaw;
-    oled.drawStr(2, 60, l2.substring(0, 32).c_str());
-  } else {
-    oled.drawStr(2, 60, "USB connected");
+    String l3 = String("err:") + lastErr + " " + lastRaw;
+    oled.drawStr(2, 62, l3.substring(0, 32).c_str());
   }
 }
 
@@ -188,15 +188,23 @@ void sendButtonEvent(int idx, bool pressed) {
 void handleConfig(JsonVariant root) {
   profileName = String((const char*)(root["profile_name"] | "Profil"));
   JsonArray modules = root["modules"];
+  bool foundMain = false;
+  String parsedMode = "(none)";
+  int modCount = 0;
   for (JsonObject mod : modules) {
+    modCount++;
     String mid = String((const char*)(mod["module_id"] | ""));
     if (mid != "main") continue;
-    // Always read; default falls through if the field is missing.
+    foundMain = true;
     String newMode = String((const char*)(mod["display_mode"] | ""));
+    parsedMode = newMode.length() ? newMode : "(empty)";
     if (newMode.length()) displayMode = newMode;
     String newCustom = String((const char*)(mod["display_custom_text"] | ""));
     customText = newCustom;
   }
+  lastCfgInfo = String("cfg n=") + String(modCount)
+              + " main=" + (foundMain ? "Y" : "N")
+              + " m=" + parsedMode;
   drawScreen();
 }
 
@@ -211,25 +219,34 @@ void handleVolume(JsonVariant root) {
   if (displayMode == MODE_VOLUME) drawScreen();
 }
 
-void handleLine(const String& line) {
-  DynamicJsonDocument doc(8192);
-  DeserializationError err = deserializeJson(doc, line);
+// One global doc reused across calls — avoids repeated 8KB allocs
+// and keeps memory predictable on a 400KB-RAM chip.
+DynamicJsonDocument g_doc(8192);
+
+void handleLine(const char* line, size_t len) {
+  lastLineLen = len;
+  g_doc.clear();
+  DeserializationError err = deserializeJson(g_doc, line, len);
   if (err) {
     lastErr = String(err.c_str()).substring(0, 12);
-    lastRaw = line.substring(0, 30);
+    // Keep both head and tail of the bad line — lets us see if the
+    // start was junk (USB enumeration noise) or the end was truncated.
+    String l(line);
+    if (l.length() > 30) lastRaw = l.substring(0, 16) + "..." + l.substring(l.length() - 8);
+    else lastRaw = l;
     drawScreen();
     return;
   }
   lastErr = "";
   lastRaw = "";
-  String cmd = String((const char*)(doc["cmd"] | ""));
+  String cmd = String((const char*)(g_doc["cmd"] | ""));
   lastCmd = cmd;
   lastRx = millis();
   rxCount++;
   if      (cmd == "discover") sendModules();
-  else if (cmd == "config")   handleConfig(doc.as<JsonVariant>());
-  else if (cmd == "clock")    handleClock(doc.as<JsonVariant>());
-  else if (cmd == "volume")   handleVolume(doc.as<JsonVariant>());
+  else if (cmd == "config")   handleConfig(g_doc.as<JsonVariant>());
+  else if (cmd == "clock")    handleClock(g_doc.as<JsonVariant>());
+  else if (cmd == "volume")   handleVolume(g_doc.as<JsonVariant>());
   drawScreen();
 }
 
@@ -248,15 +265,30 @@ void setup() {
 }
 
 void loop() {
-  // Serial line buffer
-  static String buf;
+  // Char-buffer line accumulator. Replaces the Arduino String version,
+  // which fragmented memory and (more importantly) sometimes returned
+  // a truncated buffer to deserializeJson — exactly what causes the
+  // intermittent "InvalidInput" errors the user has been seeing.
+  static char lineBuf[8192];
+  static size_t lineLen = 0;
   while (Serial.available()) {
-    char c = Serial.read();
+    int rc = Serial.read();
+    if (rc < 0) break;
+    char c = (char)rc;
     if (c == '\n' || c == '\r') {
-      if (buf.length()) handleLine(buf);
-      buf = "";
-    } else if (buf.length() < 4096) {
-      buf += c;
+      if (lineLen > 0) {
+        lineBuf[lineLen] = '\0';
+        handleLine(lineBuf, lineLen);
+        lineLen = 0;
+      }
+    } else if (lineLen < sizeof(lineBuf) - 1) {
+      lineBuf[lineLen++] = c;
+    } else {
+      // Overflow — discard the line and reset so we can recover.
+      lineLen = 0;
+      lastErr = "Overflow";
+      lastRaw = "";
+      drawScreen();
     }
   }
 
