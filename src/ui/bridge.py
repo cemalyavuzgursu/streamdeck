@@ -1,8 +1,9 @@
 """QWebChannel bridge between the React/HTML UI and the Python backend."""
 import json
+from datetime import datetime
 from typing import Any, Dict, Optional
 
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QFileDialog
 
 from src.core.action_executor import ActionExecutor
@@ -43,6 +44,30 @@ class Bridge(QObject):
         self._flasher: Optional[FirmwareFlasher] = None
         self._executor = ActionExecutor()
         self._cached_profile: Optional[Dict[str, Any]] = None
+
+        # The firmware has no RTC, so we push the current wall-clock time
+        # every 30s. The OLED only redraws if it's in CLOCK mode.
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setInterval(30_000)
+        self._clock_timer.timeout.connect(self._push_clock)
+        self._clock_timer.start()
+        # Also push immediately when a connection completes.
+        self._device.connection_changed.connect(
+            lambda connected, _port: self._push_clock() if connected else None
+        )
+
+    def _push_clock(self) -> None:
+        if not self._device.is_connected:
+            return
+        now = datetime.now()
+        try:
+            self._device.send_config({
+                "cmd": "clock",
+                "time": now.strftime("%H:%M"),
+                "date": now.strftime("%d.%m.%Y"),
+            })
+        except Exception:
+            pass
 
     def _on_device_message(self, msg: dict) -> None:
         """Dispatch incoming JSON messages from the firmware."""
