@@ -168,16 +168,63 @@ class Updater(QObject):
         if not getattr(sys, "frozen", False):
             return  # Running from source, skip
 
+        # Sanity check the download — anything under 10MB isn't our exe.
+        try:
+            if not os.path.exists(new_exe_path) or os.path.getsize(new_exe_path) < 10_000_000:
+                return
+        except OSError:
+            return
+
         current_exe = sys.executable
+
+        # COPY + retry beats MOVE for two reasons:
+        #   1. MOVE across drives is not atomic and fails mid-flight if the
+        #      target file lock is still held by the exiting process.
+        #   2. If the copy fails, the source stays intact and the user's
+        #      installed exe is untouched — they can re-run it.
+        # The retry loop covers the brief window between sys.exit() and
+        # the OS releasing the executable file lock.
         bat = (
             "@echo off\n"
-            "timeout /t 2 /nobreak >nul\n"
-            f'move /y "{new_exe_path}" "{current_exe}"\n'
-            f'start "" "{current_exe}"\n'
-            'del "%~f0"\n'
+            "title MacroPad Updater\n"
+            "echo Eski surum kapanmasi bekleniyor...\n"
+            "timeout /t 3 /nobreak >nul\n"
+            "\n"
+            f'set "NEW_FILE={new_exe_path}"\n'
+            f'set "CUR_FILE={current_exe}"\n'
+            "set RETRIES=20\n"
+            "\n"
+            ":retry\n"
+            'copy /y /b "%NEW_FILE%" "%CUR_FILE%" >nul 2>&1\n'
+            "if %errorlevel% equ 0 goto :ok\n"
+            "set /a RETRIES=%RETRIES%-1\n"
+            "if %RETRIES% gtr 0 (\n"
+            "  echo .\n"
+            "  timeout /t 1 /nobreak >nul\n"
+            "  goto :retry\n"
+            ")\n"
+            "echo.\n"
+            "echo Guncelleme basarisiz oldu. Yeni surum:\n"
+            "echo   %NEW_FILE%\n"
+            "echo Mevcut konum:\n"
+            "echo   %CUR_FILE%\n"
+            "echo.\n"
+            "echo Manuel kopyalayabilirsin. Pencereyi kapatmak icin bir tusa bas.\n"
+            "pause >nul\n"
+            "exit /b 1\n"
+            "\n"
+            ":ok\n"
+            'del /q "%NEW_FILE%" 2>nul\n'
+            'start "" "%CUR_FILE%"\n'
+            "(goto) 2>nul & del \"%~f0\"\n"
         )
         bat_path = os.path.join(tempfile.gettempdir(), "_macropad_update.bat")
         with open(bat_path, "w", encoding="utf-8") as f:
             f.write(bat)
-        subprocess.Popen(["cmd", "/c", bat_path], creationflags=subprocess.CREATE_NO_WINDOW)
+        # Show the cmd window so the user sees progress — silent failures
+        # in v1.x.x had us chasing a "failed to move" report with no log.
+        subprocess.Popen(["cmd", "/c", bat_path])
+        # Give the spawned cmd a moment to start before we yank ourselves.
+        import time
+        time.sleep(0.4)
         sys.exit(0)
