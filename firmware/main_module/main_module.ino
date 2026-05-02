@@ -185,26 +185,17 @@ void sendButtonEvent(int idx, bool pressed) {
   Serial.println();
 }
 
-void handleConfig(JsonVariant root) {
+// Lean OLED-only payload from PC. Replaces the full module-config
+// flow which kept hitting InvalidInput parse errors with bigger
+// JSON. The firmware no longer needs the action mappings since PC
+// dispatches button_events itself.
+void handleDisplay(JsonVariant root) {
   profileName = String((const char*)(root["profile_name"] | "Profil"));
-  JsonArray modules = root["modules"];
-  bool foundMain = false;
-  String parsedMode = "(none)";
-  int modCount = 0;
-  for (JsonObject mod : modules) {
-    modCount++;
-    String mid = String((const char*)(mod["module_id"] | ""));
-    if (mid != "main") continue;
-    foundMain = true;
-    String newMode = String((const char*)(mod["display_mode"] | ""));
-    parsedMode = newMode.length() ? newMode : "(empty)";
-    if (newMode.length()) displayMode = newMode;
-    String newCustom = String((const char*)(mod["display_custom_text"] | ""));
-    customText = newCustom;
-  }
-  lastCfgInfo = String("cfg n=") + String(modCount)
-              + " main=" + (foundMain ? "Y" : "N")
-              + " m=" + parsedMode;
+  String newMode = String((const char*)(root["display_mode"] | ""));
+  String parsedMode = newMode.length() ? newMode : "(empty)";
+  if (newMode.length()) displayMode = newMode;
+  customText = String((const char*)(root["display_custom_text"] | ""));
+  lastCfgInfo = String("disp m=") + parsedMode;
   drawScreen();
 }
 
@@ -244,7 +235,7 @@ void handleLine(const char* line, size_t len) {
   lastRx = millis();
   rxCount++;
   if      (cmd == "discover") sendModules();
-  else if (cmd == "config")   handleConfig(g_doc.as<JsonVariant>());
+  else if (cmd == "display")  handleDisplay(g_doc.as<JsonVariant>());
   else if (cmd == "clock")    handleClock(g_doc.as<JsonVariant>());
   else if (cmd == "volume")   handleVolume(g_doc.as<JsonVariant>());
   drawScreen();

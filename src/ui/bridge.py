@@ -138,10 +138,23 @@ class Bridge(QObject):
         # (ESP32-C3 has no USB HID), so we look up bindings here when
         # a button_event arrives.
         self._cached_profile = profile
+
+        # The firmware only needs OLED data: profile name, mode, custom
+        # text. Sending the full module/buttons/encoders array as JSON
+        # was hitting intermittent InvalidInput parse failures for
+        # reasons we couldn't pin down — and the firmware never used
+        # those fields anyway. A ~80-byte display payload removes the
+        # whole class of problem.
+        main_mod = next(
+            (m for m in profile.get("modules", [])
+             if (m or {}).get("module_type") == "main"),
+            {},
+        )
         payload = {
-            "cmd": "config",
+            "cmd": "display",
             "profile_name": profile.get("name", ""),
-            "modules": profile.get("modules", []),
+            "display_mode": main_mod.get("display_mode", "profile_name"),
+            "display_custom_text": main_mod.get("display_custom_text", ""),
         }
         try:
             self._device.send_config(payload)
