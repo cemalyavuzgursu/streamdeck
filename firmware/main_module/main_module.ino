@@ -73,7 +73,12 @@ void drawProfile() {
   if (w > 124) w = 124;
   oled.drawStr((128 - w) / 2, 40, profileName.c_str());
   oled.setFont(u8g2_font_5x7_tf);
-  oled.drawStr(2, 60, "USB connected");
+  // DEBUG: parsed display_mode shown at the bottom so we can tell
+  // whether the value came through. Should switch to drawClock() etc.
+  // automatically; if it stays here showing "mode=clock", drawScreen
+  // is broken; if "mode=" or "mode=profile_name", parse never set it.
+  String dbg = "mode=" + displayMode;
+  oled.drawStr(2, 60, dbg.c_str());
 }
 
 void drawVolume() {
@@ -179,12 +184,11 @@ void handleConfig(JsonVariant root) {
   for (JsonObject mod : modules) {
     String mid = String((const char*)(mod["module_id"] | ""));
     if (mid != "main") continue;
-    if (mod.containsKey("display_mode")) {
-      displayMode = String((const char*)(mod["display_mode"] | MODE_PROFILE));
-    }
-    if (mod.containsKey("display_custom_text")) {
-      customText = String((const char*)(mod["display_custom_text"] | ""));
-    }
+    // Always read; default falls through if the field is missing.
+    String newMode = String((const char*)(mod["display_mode"] | ""));
+    if (newMode.length()) displayMode = newMode;
+    String newCustom = String((const char*)(mod["display_custom_text"] | ""));
+    customText = newCustom;
   }
   drawScreen();
 }
@@ -201,8 +205,18 @@ void handleVolume(JsonVariant root) {
 }
 
 void handleLine(const String& line) {
-  StaticJsonDocument<2048> doc;
-  if (deserializeJson(doc, line) != DeserializationError::Ok) return;
+  // Bigger buffer — a 6-button main module config can easily exceed
+  // 2KB once each button has a label, action_data, etc. ArduinoJson
+  // returns NoMemory and silently drops extra fields if undersized.
+  DynamicJsonDocument doc(8192);
+  DeserializationError err = deserializeJson(doc, line);
+  if (err) {
+    // Surface parse errors on the OLED so silent drops don't look
+    // like the firmware is ignoring commands.
+    profileName = String("parse: ") + err.c_str();
+    drawScreen();
+    return;
+  }
   String cmd = String((const char*)(doc["cmd"] | ""));
   lastRx = millis();
   rxCount++;
@@ -210,7 +224,7 @@ void handleLine(const String& line) {
   else if (cmd == "config")   handleConfig(doc.as<JsonVariant>());
   else if (cmd == "clock")    handleClock(doc.as<JsonVariant>());
   else if (cmd == "volume")   handleVolume(doc.as<JsonVariant>());
-  drawScreen();   // keep RX indicator + counter fresh on every command
+  drawScreen();
 }
 
 // ─────────────── Setup / Loop ───────────────
