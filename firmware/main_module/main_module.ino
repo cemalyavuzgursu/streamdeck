@@ -50,6 +50,9 @@ constexpr unsigned long DEBOUNCE_MS = 30;
 unsigned long lastDraw = 0;
 unsigned long lastRx = 0;          // millis() when last JSON command arrived
 uint16_t      rxCount = 0;         // total commands received since boot
+String        lastCmd = "-";       // last cmd field successfully parsed
+String        lastErr = "";        // last parse error (truncated)
+String        lastRaw = "";        // first 30 chars of last bad input
 
 // ─────────────── OLED ───────────────
 void drawClock() {
@@ -71,14 +74,18 @@ void drawProfile() {
   oled.setFont(u8g2_font_helvB14_tf);
   int w = oled.getStrWidth(profileName.c_str());
   if (w > 124) w = 124;
-  oled.drawStr((128 - w) / 2, 40, profileName.c_str());
-  oled.setFont(u8g2_font_5x7_tf);
-  // DEBUG: parsed display_mode shown at the bottom so we can tell
-  // whether the value came through. Should switch to drawClock() etc.
-  // automatically; if it stays here showing "mode=clock", drawScreen
-  // is broken; if "mode=" or "mode=profile_name", parse never set it.
-  String dbg = "mode=" + displayMode;
-  oled.drawStr(2, 60, dbg.c_str());
+  oled.drawStr((128 - w) / 2, 36, profileName.c_str());
+  oled.setFont(u8g2_font_4x6_tf);
+  // DEBUG: parsed display_mode + last received cmd + first chars of
+  // any invalid line. Tells us at a glance which message broke.
+  String l1 = String("mode=") + displayMode + "  last=" + lastCmd;
+  oled.drawStr(2, 50, l1.c_str());
+  if (lastErr.length()) {
+    String l2 = String("err:") + lastErr + " " + lastRaw;
+    oled.drawStr(2, 60, l2.substring(0, 32).c_str());
+  } else {
+    oled.drawStr(2, 60, "USB connected");
+  }
 }
 
 void drawVolume() {
@@ -205,19 +212,18 @@ void handleVolume(JsonVariant root) {
 }
 
 void handleLine(const String& line) {
-  // Bigger buffer — a 6-button main module config can easily exceed
-  // 2KB once each button has a label, action_data, etc. ArduinoJson
-  // returns NoMemory and silently drops extra fields if undersized.
   DynamicJsonDocument doc(8192);
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
-    // Surface parse errors on the OLED so silent drops don't look
-    // like the firmware is ignoring commands.
-    profileName = String("parse: ") + err.c_str();
+    lastErr = String(err.c_str()).substring(0, 12);
+    lastRaw = line.substring(0, 30);
     drawScreen();
     return;
   }
+  lastErr = "";
+  lastRaw = "";
   String cmd = String((const char*)(doc["cmd"] | ""));
+  lastCmd = cmd;
   lastRx = millis();
   rxCount++;
   if      (cmd == "discover") sendModules();
