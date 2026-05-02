@@ -72,8 +72,17 @@ function Topbar({ onOpenFlash }) {
   const sendConfig = () => {
     if (!state.connected) return showToast('Cihaz bağlı değil');
     if (!activeProfile) return;
+    const payload = JSON.stringify(activeProfile);
+    // Log so we can verify display_mode etc. survived the round-trip
+    // through localStorage / discovery merge. Open DevTools → Console.
+    console.log('[send_config] payload:', payload);
+    const main = (activeProfile.modules || []).find((m) => m.module_type === 'main');
+    if (main) {
+      console.log('[send_config] main display_mode:', main.display_mode,
+                  ' custom:', main.display_custom_text);
+    }
     if (bridge) {
-      bridge.send_config(JSON.stringify(activeProfile), (ok) => {
+      bridge.send_config(payload, (ok) => {
         showToast(ok ? `Konfigürasyon gönderildi → ${activeProfile.name}` : 'Gönderim hatası');
       });
     } else {
@@ -1006,12 +1015,19 @@ function DiscoveryWatcher() {
             });
             if (!old) return fresh;
 
-            const bN = Math.min(old.buttons.length, fresh.buttons.length);
+            const bN = Math.min((old.buttons || []).length, fresh.buttons.length);
             for (let i = 0; i < bN; i++) fresh.buttons[i] = old.buttons[i];
-            const eN = Math.min(old.encoders.length, fresh.encoders.length);
+            const eN = Math.min((old.encoders || []).length, fresh.encoders.length);
             for (let i = 0; i < eN; i++) fresh.encoders[i] = old.encoders[i];
-            fresh.display_mode = old.display_mode;
-            fresh.display_custom_text = old.display_custom_text;
+            // Only carry old values forward if they're actually set —
+            // assigning `undefined` would clobber the fresh defaults
+            // and JSON.stringify would then drop the field entirely,
+            // which is exactly what made the firmware see mode=
+            // (default profile_name) no matter what the user picked.
+            if (old.display_mode) fresh.display_mode = old.display_mode;
+            if (old.display_custom_text != null) {
+              fresh.display_custom_text = old.display_custom_text;
+            }
             return fresh;
           });
 

@@ -115,6 +115,19 @@ function defaultState() {
 const StoreCtx = createContext(null);
 function useStore() { return useContext(StoreCtx); }
 
+// Backfill fields older saved state may be missing. Without this,
+// an undefined display_mode falls out of JSON.stringify entirely and
+// the firmware sees the field as absent — its default takes over and
+// the user's mode selection never reaches the device.
+function normaliseModule(m) {
+  if (!m) return m;
+  if (m.display_mode == null) m.display_mode = DISPLAY_CLOCK;
+  if (m.display_custom_text == null) m.display_custom_text = '';
+  if (!Array.isArray(m.buttons)) m.buttons = [];
+  if (!Array.isArray(m.encoders)) m.encoders = [];
+  return m;
+}
+
 function StoreProvider({ children }) {
   const [state, setState] = useState(() => {
     try {
@@ -122,6 +135,7 @@ function StoreProvider({ children }) {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.profiles) && parsed.profiles.length) {
+          parsed.profiles.forEach((p) => (p.modules || []).forEach(normaliseModule));
           parsed.connected = false;
           parsed.selection = null;
           return parsed;
