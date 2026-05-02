@@ -48,12 +48,13 @@ bool btnState[BTN_COUNT] = {false};
 unsigned long btnDebounce[BTN_COUNT] = {0};
 constexpr unsigned long DEBOUNCE_MS = 30;
 unsigned long lastDraw = 0;
+unsigned long lastRx = 0;          // millis() when last JSON command arrived
+uint16_t      rxCount = 0;         // total commands received since boot
 
 // ─────────────── OLED ───────────────
 void drawClock() {
   oled.clearBuffer();
-  oled.setFont(u8g2_font_logisoso32_tn);  // büyük rakamlar
-  // Ortalama
+  oled.setFont(u8g2_font_logisoso32_tn);
   int w = oled.getStrWidth(clockTime.c_str());
   oled.drawStr((128 - w) / 2, 44, clockTime.c_str());
   if (clockDate.length()) {
@@ -61,7 +62,6 @@ void drawClock() {
     int w2 = oled.getStrWidth(clockDate.c_str());
     oled.drawStr((128 - w2) / 2, 60, clockDate.c_str());
   }
-  oled.sendBuffer();
 }
 
 void drawProfile() {
@@ -74,7 +74,6 @@ void drawProfile() {
   oled.drawStr((128 - w) / 2, 40, profileName.c_str());
   oled.setFont(u8g2_font_5x7_tf);
   oled.drawStr(2, 60, "USB connected");
-  oled.sendBuffer();
 }
 
 void drawVolume() {
@@ -91,7 +90,6 @@ void drawVolume() {
   oled.setFont(u8g2_font_helvR10_tf);
   int w = oled.getStrWidth(pct.c_str());
   oled.drawStr((128 - w) / 2, 60, pct.c_str());
-  oled.sendBuffer();
 }
 
 void drawCustom() {
@@ -113,7 +111,21 @@ void drawCustom() {
     oled.drawStr((128 - w1) / 2, 30, l1.c_str());
     oled.drawStr((128 - w2) / 2, 52, l2.c_str());
   }
-  oled.sendBuffer();
+}
+
+void drawRxIndicator() {
+  // Top-right corner: solid dot for ~300ms after each received command,
+  // plus a tiny RX counter in the corner. If you press "Cihaza Gönder"
+  // and nothing changes here, the firmware never received the message.
+  if (millis() - lastRx < 300) {
+    oled.drawDisc(122, 4, 3);
+  } else {
+    oled.drawCircle(122, 4, 3);
+  }
+  oled.setFont(u8g2_font_4x6_tf);
+  String c = "RX " + String(rxCount);
+  int w = oled.getStrWidth(c.c_str());
+  oled.drawStr(115 - w, 7, c.c_str());
 }
 
 void drawScreen() {
@@ -121,6 +133,8 @@ void drawScreen() {
   else if (displayMode == MODE_VOLUME)  drawVolume();
   else if (displayMode == MODE_CUSTOM)  drawCustom();
   else                                  drawProfile();
+  drawRxIndicator();
+  oled.sendBuffer();
   lastDraw = millis();
 }
 
@@ -190,10 +204,13 @@ void handleLine(const String& line) {
   StaticJsonDocument<2048> doc;
   if (deserializeJson(doc, line) != DeserializationError::Ok) return;
   String cmd = String((const char*)(doc["cmd"] | ""));
+  lastRx = millis();
+  rxCount++;
   if      (cmd == "discover") sendModules();
   else if (cmd == "config")   handleConfig(doc.as<JsonVariant>());
   else if (cmd == "clock")    handleClock(doc.as<JsonVariant>());
   else if (cmd == "volume")   handleVolume(doc.as<JsonVariant>());
+  drawScreen();   // keep RX indicator + counter fresh on every command
 }
 
 // ─────────────── Setup / Loop ───────────────
@@ -234,8 +251,12 @@ void loop() {
     }
   }
 
-  // Saat modunda dakika değişimi yakalamak için ekranı 5 saniyede bir çiz
+  // Saat modunda dakika değişimi yakalamak için ekranı 5 saniyede bir çiz.
+  // Ayrıca RX dot'unun sönmesini sağlamak için son komuttan ~400ms sonra
+  // bir ekstra çizim yap.
   if (displayMode == MODE_CLOCK && (now - lastDraw) > 5000) {
+    drawScreen();
+  } else if (lastRx && (now - lastRx) > 350 && (now - lastDraw) > 350) {
     drawScreen();
   }
 

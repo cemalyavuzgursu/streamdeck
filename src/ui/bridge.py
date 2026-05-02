@@ -145,9 +145,13 @@ class Bridge(QObject):
         }
         try:
             self._device.send_config(payload)
-            return True
         except Exception:
             return False
+        # Immediately follow up with the current time. If the user just
+        # switched the OLED to clock mode, this avoids a "--:--" stall
+        # until the next 30-second tick.
+        self._push_clock()
+        return True
 
     def _on_modules_updated(self, modules):
         serialised = [
