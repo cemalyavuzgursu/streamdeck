@@ -527,7 +527,71 @@ function MediaEditor({ cfg, setCfg }) {
   );
 }
 
+function AppPickerModal({ onClose, onPick }) {
+  const [apps, setApps] = useState([]);
+  const [filter, setFilter] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!bridge || !bridge.list_installed_apps) {
+      setLoading(false);
+      return;
+    }
+    bridge.list_installed_apps((js) => {
+      try { setApps(JSON.parse(js) || []); }
+      catch { setApps([]); }
+      setLoading(false);
+    });
+  }, []);
+
+  const f = filter.trim().toLowerCase();
+  const filtered = f
+    ? apps.filter((a) => a.name.toLowerCase().includes(f))
+    : apps;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 520, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div className="ttl">Yüklü Uygulamalar</div>
+          <button className="icon-btn" onClick={onClose}>✕</button>
+        </div>
+        <div style={{ padding: '12px 20px 8px' }}>
+          <input className="input" autoFocus placeholder="Ara…"
+            value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </div>
+        <div style={{ overflowY: 'auto', padding: '0 12px 12px', flex: 1 }}>
+          {loading && <div style={{ padding: 20, color: 'var(--muted)' }}>Yükleniyor…</div>}
+          {!loading && filtered.length === 0 && (
+            <div style={{ padding: 20, color: 'var(--muted)', fontSize: 13 }}>
+              Eşleşen uygulama yok.
+            </div>
+          )}
+          {filtered.slice(0, 200).map((a) => (
+            <div key={a.path}
+              onClick={() => { onPick(a); onClose(); }}
+              style={{
+                padding: '8px 10px', borderRadius: 6, cursor: 'pointer',
+                fontSize: 13, color: 'var(--ink-2)',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-2)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+              <div style={{ fontWeight: 500 }}>{a.name}</div>
+              <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {a.path}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppEditor({ cfg, setCfg }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const pickFile = () => {
     if (!bridge) return;
     bridge.pick_executable((path) => {
@@ -537,35 +601,117 @@ function AppEditor({ cfg, setCfg }) {
   return (
     <>
       <div className="field">
-        <label>Uygulama Yolu</label>
+        <label>Uygulama</label>
         <div className="row">
-          <input className="input mono grow" value={cfg.action_data.path || ''}
-            placeholder="C:\\Program Files\\Spotify\\Spotify.exe"
-            onChange={(e) => setCfg((c) => { c.action_data.path = e.target.value; })} />
-          {bridge && <button className="btn sm" onClick={pickFile} title="Dosya seç">…</button>}
+          <button className="btn grow" onClick={() => setPickerOpen(true)}
+            title="Yüklü uygulamalar arasından seç">
+            📋 Listeden Seç
+          </button>
+          {bridge && (
+            <button className="btn sm" onClick={pickFile} title="Manuel dosya seç">…</button>
+          )}
         </div>
       </div>
       <div className="field">
-        <label>Argümanlar</label>
+        <label>Yol</label>
+        <input className="input mono" value={cfg.action_data.path || ''}
+          placeholder="C:\\Program Files\\Spotify\\Spotify.exe"
+          onChange={(e) => setCfg((c) => { c.action_data.path = e.target.value; })} />
+      </div>
+      <div className="field">
+        <label>Argümanlar (opsiyonel)</label>
         <input className="input mono" value={cfg.action_data.args || ''}
           placeholder="--minimized"
           onChange={(e) => setCfg((c) => { c.action_data.args = e.target.value; })} />
       </div>
+      {pickerOpen && (
+        <AppPickerModal onClose={() => setPickerOpen(false)}
+          onPick={(a) => setCfg((c) => { c.action_data.path = a.path; })} />
+      )}
     </>
   );
 }
 
 function MacroEditor({ cfg, setCfg }) {
+  const [recording, setRecording] = useState(false);
+  const lastTimeRef = useRef(0);
+
+  useEffect(() => {
+    if (!recording) return;
+    lastTimeRef.current = Date.now();
+    const handler = (e) => {
+      // Stop on Esc with no modifiers
+      if (e.keyCode === 27 && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+        setRecording(false);
+        e.preventDefault();
+        return;
+      }
+      // Skip pure modifier presses
+      if ([16, 17, 18, 91].includes(e.keyCode)) return;
+      e.preventDefault();
+      const parts = [];
+      if (e.ctrlKey) parts.push('ctrl');
+      if (e.altKey) parts.push('alt');
+      if (e.shiftKey) parts.push('shift');
+      if (e.metaKey) parts.push('win');
+      const map = {
+        13: 'enter', 9: 'tab', 8: 'backspace', 32: 'space',
+        37: 'left', 38: 'up', 39: 'right', 40: 'down',
+        46: 'delete', 36: 'home', 35: 'end', 33: 'pageup', 34: 'pagedown',
+      };
+      let name = map[e.keyCode];
+      if (!name && e.key.length === 1) name = e.key.toLowerCase();
+      else if (!name && e.key.startsWith('F')) name = e.key.toLowerCase();
+      if (!name) return;
+      parts.push(name);
+
+      const now = Date.now();
+      const gap = now - lastTimeRef.current;
+      lastTimeRef.current = now;
+
+      setCfg((c) => {
+        let seq = (c.action_data.sequence || '').trimEnd();
+        // Insert wait line if there's been a noticeable pause (>250ms)
+        if (seq && gap > 250 && gap < 5000) {
+          seq += '\nwait:' + Math.round(gap);
+        }
+        seq += (seq ? '\n' : '') + parts.join('+');
+        c.action_data.sequence = seq;
+      });
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [recording, setCfg]);
+
+  const clear = () => setCfg((c) => { c.action_data.sequence = ''; });
+
   return (
-    <div className="field">
-      <label>Makro Dizisi</label>
-      <textarea className="textarea" value={cfg.action_data.sequence || ''}
-        placeholder={'ctrl+c\nwait:200\nctrl+v\ntype:Hello'}
-        onChange={(e) => setCfg((c) => { c.action_data.sequence = e.target.value; })} />
-      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
-        Desteklenen: tuş kombinasyonları, wait:ms, type:metin
+    <>
+      <div className="field">
+        <label>Makro Dizisi</label>
+        <div className={`capture-zone ${recording ? 'armed' : ''}`}
+          style={{ marginBottom: 8 }}
+          onClick={() => setRecording((r) => !r)}>
+          {recording ? (
+            <>● Kayıt yapılıyor — tuş kombinasyonlarına basın
+              <div className="hint">esc → bitir</div></>
+          ) : (
+            <>⏺ Kaydet — tıklayın, sonra tuşlara basın
+              <div className="hint">eski içerik korunur, üstüne eklenir</div></>
+          )}
+        </div>
+        <textarea className="textarea" value={cfg.action_data.sequence || ''}
+          placeholder={'ctrl+c\nwait:200\nctrl+v\ntype:Hello'}
+          onChange={(e) => setCfg((c) => { c.action_data.sequence = e.target.value; })} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+            Desteklenen: tuş kombinasyonları, wait:ms, type:metin
+          </div>
+          <button className="btn ghost sm" onClick={clear}>Temizle</button>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -920,6 +1066,17 @@ function ConnectionWatcher() {
       }));
     };
     bridge.device_connection_changed.connect(onChange);
+    // Auto-connect can fire before this component subscribes — query
+    // current state right after subscribing so we don't miss the
+    // initial signal.
+    if (bridge.get_connection_state) {
+      bridge.get_connection_state((js) => {
+        try {
+          const s = JSON.parse(js);
+          if (s && s.connected) onChange(true, s.port);
+        } catch {}
+      });
+    }
     return () => {
       try { bridge.device_connection_changed.disconnect(onChange); } catch {}
     };

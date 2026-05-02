@@ -35,7 +35,13 @@ constexpr const char* MODE_VOLUME  = "volume";
 constexpr const char* MODE_CUSTOM  = "custom_text";
 
 // ─────────────── Globals ───────────────
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
+// 1" OLED'ler genelde SH1106 controller kullanır (SSD1306 değil).
+// SH1106'nın 132x64 RAM'i var, sadece 128 sütunu görünür → SSD1306
+// driver'ı kullanılırsa içerik 2 piksel sola kayar ve sağda 2
+// sütunluk RAM çöp olarak görünür. Eğer ekranınız SSD1306 ise üst
+// satırı yorum yapıp altındakini açın.
+U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
+// U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 
 String profileName  = "Hazır";
 String displayMode  = MODE_PROFILE;   // varsayılan

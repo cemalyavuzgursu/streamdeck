@@ -187,6 +187,14 @@ class Bridge(QObject):
     def list_ports_detailed(self) -> str:
         return json.dumps(DeviceManager.list_ports_detailed())
 
+    @pyqtSlot(result=str)
+    def get_connection_state(self) -> str:
+        """Snapshot for JS components mounting after auto-connect fired."""
+        return json.dumps({
+            "connected": self._device.is_connected,
+            "port": self._device.current_port,
+        })
+
     @pyqtSlot(str, result=bool)
     def connect_device(self, port: str) -> bool:
         # Manual connect re-arms auto-connect for that port.
@@ -306,9 +314,47 @@ class Bridge(QObject):
     @pyqtSlot(result=str)
     def pick_executable(self) -> str:
         path, _ = QFileDialog.getOpenFileName(
-            None, "Uygulama seç", "", "Çalıştırılabilir (*.exe);;All files (*.*)"
+            None, "Uygulama seç", "", "Çalıştırılabilir (*.exe *.lnk);;All files (*.*)"
         )
         return path or ""
+
+    @pyqtSlot(result=str)
+    def list_installed_apps(self) -> str:
+        """Scan Start Menu directories for .lnk shortcuts.
+
+        Each shortcut is launched via os.startfile in ActionExecutor,
+        which lets Windows resolve the target — so we don't need to
+        parse .lnk binary format ourselves.
+        """
+        import os
+        from pathlib import Path
+        roots = []
+        pd = os.environ.get("PROGRAMDATA")
+        if pd:
+            roots.append(Path(pd) / "Microsoft" / "Windows" / "Start Menu" / "Programs")
+        ad = os.environ.get("APPDATA")
+        if ad:
+            roots.append(Path(ad) / "Microsoft" / "Windows" / "Start Menu" / "Programs")
+
+        # Folders to ignore (system clutter)
+        skip_keywords = ("uninstall", "kaldır", "yardım", "help", "readme")
+        seen = {}
+        for base in roots:
+            if not base.exists():
+                continue
+            for lnk in base.rglob("*.lnk"):
+                name = lnk.stem
+                low = name.lower()
+                if any(kw in low for kw in skip_keywords):
+                    continue
+                if name not in seen:
+                    seen[name] = str(lnk)
+
+        items = sorted(
+            ({"name": n, "path": p} for n, p in seen.items()),
+            key=lambda x: x["name"].lower(),
+        )
+        return json.dumps(items)
 
     # ─────────────── Updater ───────────────
     @pyqtSlot()

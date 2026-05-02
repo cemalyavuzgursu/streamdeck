@@ -133,8 +133,16 @@ class ActionExecutor:
         if not path:
             return "no path"
         try:
-            cmd = [path] + (shlex.split(args) if args else [])
-            subprocess.Popen(cmd, close_fds=True)
+            # .lnk shortcuts need shell resolution; subprocess can't run
+            # them directly. os.startfile lets the OS resolve the target
+            # and respects working directory + arguments embedded in the
+            # shortcut.
+            import os
+            if path.lower().endswith(".lnk"):
+                os.startfile(path)
+            else:
+                cmd = [path] + (shlex.split(args) if args else [])
+                subprocess.Popen(cmd, close_fds=True)
             return f"launched {path}"
         except Exception as e:
             return f"launch failed: {e}"
