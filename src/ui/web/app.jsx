@@ -376,10 +376,19 @@ function Encoder({ enc, idx, selection, onPick }) {
 // ───────── OLED preview ─────────
 function OledPreview({ mode, customText, profileName }) {
   const [, setTick] = useState(0);
+  const [volume, setVolume] = useState(-1);
   useEffect(() => { const i = setInterval(() => setTick((t) => t + 1), 1000); return () => clearInterval(i); }, []);
+  useEffect(() => {
+    if (mode !== DISPLAY_VOLUME || !bridge || !bridge.get_system_volume) return;
+    const tick = () => bridge.get_system_volume((v) => setVolume(v));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [mode]);
   const now = new Date();
   const time = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
   const date = now.toLocaleDateString('tr-TR');
+  const isMarket = mode === DISPLAY_CRYPTO || mode === DISPLAY_CURRENCY || mode === DISPLAY_STOCK;
 
   return (
     <div className="oled-frame">
@@ -400,12 +409,24 @@ function OledPreview({ mode, customText, profileName }) {
         {mode === DISPLAY_VOLUME && (
           <>
             <div className="oled-label">SES SEVİYESİ</div>
-            <div className="oled-bar"><div className="oled-bar-fill" style={{ width: '65%' }} /></div>
-            <div className="oled-bar-pct">65%</div>
+            <div className="oled-bar">
+              <div className="oled-bar-fill" style={{ width: `${Math.max(0, volume)}%` }} />
+            </div>
+            <div className="oled-bar-pct">{volume < 0 ? '?%' : `${volume}%`}</div>
           </>
         )}
         {mode === DISPLAY_CUSTOM && (
           <div className="oled-custom">{customText || '(boş)'}</div>
+        )}
+        {isMarket && (
+          <>
+            <div className="oled-label">
+              {mode === DISPLAY_CRYPTO ? 'KRİPTO' : mode === DISPLAY_CURRENCY ? 'DÖVİZ' : 'HİSSE'}
+            </div>
+            <div className="oled-big" style={{ fontSize: 18, color: '#8aa6c0' }}>
+              canlı veri
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -433,8 +454,19 @@ function ModuleCard({ mod, idx, total }) {
     if (sel && sel.moduleId === mod.module_id) setState((st) => ({ ...st, selection: null }));
   };
 
-  const cols = Math.min(4, mod.button_count) || 1;
-  const keyGridStyle = { gridTemplateColumns: `repeat(${cols}, minmax(80px, 96px))` };
+  // Mirror the physical layout: 6 buttons → 2 rows of 3, 4 → 2x2,
+  // 8 → 2x4. For other counts, pick the columns that minimise empty
+  // cells in a roughly-square grid.
+  const cols = (() => {
+    const n = mod.button_count;
+    if (n <= 1) return 1;
+    if (n === 2) return 2;
+    if (n === 3) return 3;
+    if (n === 4) return 2;
+    if (n <= 6) return 3;
+    return 4;
+  })();
+  const keyGridStyle = { gridTemplateColumns: `repeat(${cols}, minmax(72px, 92px))`, justifyContent: 'center' };
 
   const isKeySel = (i) => sel && sel.moduleId === mod.module_id && sel.kind === 'button' && sel.index === i;
   const isDispSel = sel && sel.moduleId === mod.module_id && sel.kind === 'display';
@@ -460,27 +492,9 @@ function ModuleCard({ mod, idx, total }) {
         <button className="icon-btn danger" title="Kaldır" onClick={removeModule}>✕</button>
       </div>
       <div className="module-body">
-        {mod.button_count > 0 && (
-          <div className="keys" style={keyGridStyle}>
-            {mod.buttons.map((b, i) => (
-              <KeyButton key={i} btn={b} idx={i} selected={isKeySel(i)}
-                onClick={() => select({ moduleId: mod.module_id, kind: 'button', index: i })} />
-            ))}
-          </div>
-        )}
-
-        {mod.encoder_count > 0 && (
-          <div className="encoders-row">
-            {mod.encoders.map((e, i) => (
-              <Encoder key={i} enc={e} idx={i}
-                selection={sel && sel.moduleId === mod.module_id ? sel : null}
-                onPick={(sub) => select({ moduleId: mod.module_id, kind: 'encoder', index: i, sub })} />
-            ))}
-          </div>
-        )}
-
+        {/* Cihazdaki fiziksel düzeni yansıt: ekran üstte, butonlar altta. */}
         {mod.has_display && (
-          <div className="oled-row">
+          <div className="oled-row" style={{ justifyContent: 'center' }}>
             <OledPreview
               mode={mod.display_mode}
               customText={mod.display_custom_text}
@@ -496,6 +510,25 @@ function ModuleCard({ mod, idx, total }) {
                 mode: {mod.display_mode}
               </span>
             </div>
+          </div>
+        )}
+
+        {mod.button_count > 0 && (
+          <div className="keys" style={keyGridStyle}>
+            {mod.buttons.map((b, i) => (
+              <KeyButton key={i} btn={b} idx={i} selected={isKeySel(i)}
+                onClick={() => select({ moduleId: mod.module_id, kind: 'button', index: i })} />
+            ))}
+          </div>
+        )}
+
+        {mod.encoder_count > 0 && (
+          <div className="encoders-row" style={{ justifyContent: 'center' }}>
+            {mod.encoders.map((e, i) => (
+              <Encoder key={i} enc={e} idx={i}
+                selection={sel && sel.moduleId === mod.module_id ? sel : null}
+                onPick={(sub) => select({ moduleId: mod.module_id, kind: 'encoder', index: i, sub })} />
+            ))}
           </div>
         )}
       </div>
@@ -831,15 +864,95 @@ function ProfileSwitchEditor({ cfg, setCfg }) {
   );
 }
 
+function SymbolPickerModal({ mode, onClose, onPick }) {
+  const [items, setItems] = useState([]);
+  const [filter, setFilter] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!bridge || !bridge.list_market_symbols) {
+      setLoading(false);
+      return;
+    }
+    bridge.list_market_symbols(mode, (js) => {
+      try { setItems(JSON.parse(js) || []); }
+      catch { setItems([]); }
+      setLoading(false);
+    });
+  }, [mode]);
+
+  const f = filter.trim().toLowerCase();
+  const filtered = f
+    ? items.filter((it) =>
+        it.symbol.toLowerCase().includes(f) || it.name.toLowerCase().includes(f))
+    : items;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 480, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div className="ttl">Sembol Seç</div>
+          <button className="icon-btn" onClick={onClose}>✕</button>
+        </div>
+        <div style={{ padding: '12px 20px 8px' }}>
+          <input className="input" autoFocus placeholder="Ara…"
+            value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </div>
+        <div style={{ overflowY: 'auto', padding: '0 12px 12px', flex: 1 }}>
+          {loading && <div style={{ padding: 20, color: 'var(--muted)' }}>Yükleniyor…</div>}
+          {!loading && filtered.length === 0 && (
+            <div style={{ padding: 20, color: 'var(--muted)', fontSize: 13 }}>
+              Eşleşme yok. Manuel olarak yazabilirsin.
+            </div>
+          )}
+          {filtered.map((it) => (
+            <div key={it.symbol}
+              onClick={() => { onPick(it.symbol); onClose(); }}
+              style={{ padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-2)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, marginRight: 10 }}>{it.symbol}</span>
+              <span style={{ color: 'var(--muted)' }}>{it.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DisplayInspector({ moduleId }) {
   const { updateActiveProfile, activeProfile } = useStore();
   const mod = activeProfile.modules.find((m) => m.module_id === moduleId);
+  const [pickerOpen, setPickerOpen] = useState(false);
   if (!mod) return null;
   const isMarket = (
     mod.display_mode === DISPLAY_CRYPTO ||
     mod.display_mode === DISPLAY_CURRENCY ||
     mod.display_mode === DISPLAY_STOCK
   );
+
+  const symbols = mod.display_symbols || [];
+
+  const addSymbol = (s) => {
+    const sym = (s || '').trim();
+    if (!sym) return;
+    updateActiveProfile((p) => {
+      const m = p.modules.find((mm) => mm.module_id === moduleId);
+      if (!m) return;
+      if (!Array.isArray(m.display_symbols)) m.display_symbols = [];
+      if (!m.display_symbols.includes(sym)) m.display_symbols.push(sym);
+    });
+  };
+  const removeSymbol = (i) => {
+    updateActiveProfile((p) => {
+      const m = p.modules.find((mm) => mm.module_id === moduleId);
+      if (!m || !Array.isArray(m.display_symbols)) return;
+      m.display_symbols.splice(i, 1);
+    });
+  };
+
   return (
     <>
       <div className="field">
@@ -856,6 +969,7 @@ function DisplayInspector({ moduleId }) {
           ))}
         </div>
       </div>
+
       {mod.display_mode === DISPLAY_CUSTOM && (
         <div className="field">
           <label>Özel Metin</label>
@@ -865,20 +979,49 @@ function DisplayInspector({ moduleId }) {
             })} />
         </div>
       )}
+
       {isMarket && (
-        <div className="field">
-          <label>Sembol</label>
-          <input className="input mono" value={mod.display_symbol || ''}
-            placeholder={SYMBOL_PLACEHOLDERS[mod.display_mode] || ''}
-            onChange={(e) => updateActiveProfile((p) => {
-              const m = p.modules.find((mm) => mm.module_id === moduleId);
-              if (m) m.display_symbol = e.target.value;
-            })} />
-          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
-            {SYMBOL_HINTS[mod.display_mode] || ''}
+        <>
+          <div className="field">
+            <label>Semboller (sırayla döner)</label>
+            {symbols.length === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>
+                Henüz sembol eklenmemiş.
+              </div>
+            )}
+            {symbols.map((s, i) => (
+              <div key={i} className="row" style={{ marginBottom: 4, gap: 6 }}>
+                <input className="input mono grow" value={s}
+                  onChange={(e) => updateActiveProfile((p) => {
+                    const m = p.modules.find((mm) => mm.module_id === moduleId);
+                    if (m) m.display_symbols[i] = e.target.value;
+                  })} />
+                <button className="icon-btn danger" onClick={() => removeSymbol(i)}>✕</button>
+              </div>
+            ))}
+            <div className="row" style={{ gap: 6, marginTop: 6 }}>
+              <button className="btn grow" onClick={() => setPickerOpen(true)}>📋 Listeden Ekle</button>
+              <button className="btn ghost sm" onClick={() => addSymbol('')}>＋ Boş satır</button>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
+              {SYMBOL_HINTS[mod.display_mode] || ''}
+            </div>
           </div>
-        </div>
+
+          {symbols.length > 1 && (
+            <div className="field">
+              <label>Geçiş aralığı (saniye)</label>
+              <input className="input mono" type="number" min={2} max={300}
+                value={mod.display_rotate_seconds ?? 5}
+                onChange={(e) => updateActiveProfile((p) => {
+                  const m = p.modules.find((mm) => mm.module_id === moduleId);
+                  if (m) m.display_rotate_seconds = Math.max(2, +e.target.value || 5);
+                })} />
+            </div>
+          )}
+        </>
       )}
+
       <div className="field">
         <label className="check" style={{ cursor: 'pointer' }}>
           <input type="checkbox" checked={!!mod.display_invert}
@@ -892,6 +1035,7 @@ function DisplayInspector({ moduleId }) {
           OLED tek renk olduğu için tam renk seçimi mümkün değil — sadece ters çevrilebilir.
         </div>
       </div>
+
       <div className="field">
         <label>Modül Adı</label>
         <input className="input" value={mod.name}
@@ -899,6 +1043,11 @@ function DisplayInspector({ moduleId }) {
             const m = p.modules.find((mm) => mm.module_id === moduleId); if (m) m.name = e.target.value;
           })} />
       </div>
+
+      {pickerOpen && (
+        <SymbolPickerModal mode={mod.display_mode} onClose={() => setPickerOpen(false)}
+          onPick={(s) => addSymbol(s)} />
+      )}
     </>
   );
 }

@@ -62,12 +62,15 @@ jobs:
           --collect-all certifi
           --collect-submodules requests
           --collect-submodules pynput
+          --collect-submodules pycaw
+          --collect-submodules comtypes
           --hidden-import PyQt5.sip
           --hidden-import PyQt5.QtWebEngineWidgets
           --hidden-import PyQt5.QtWebChannel
           --hidden-import serial.tools.list_ports
           --hidden-import pynput.keyboard._win32
           --hidden-import pynput.mouse._win32
+          --hidden-import comtypes.stream
           src/main.py
 
       - name: Smoke test (headless)

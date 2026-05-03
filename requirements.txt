@@ -4,3 +4,5 @@ pyserial>=3.5
 requests>=2.31.0
 esptool>=4.7.0
 pynput>=1.7.6
+pycaw>=20240210
+comtypes>=1.4.1

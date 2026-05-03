@@ -82,7 +82,8 @@ function newModule(opts = {}) {
     encoders: Array.from({ length: encoderCount }, newEncoder),
     display_mode: DISPLAY_CLOCK,
     display_custom_text: '',
-    display_symbol: '',
+    display_symbols: [],
+    display_rotate_seconds: 5,
     display_invert: false,
   };
 }
@@ -136,7 +137,11 @@ function normaliseModule(m) {
   if (!m) return m;
   if (m.display_mode == null) m.display_mode = DISPLAY_CLOCK;
   if (m.display_custom_text == null) m.display_custom_text = '';
-  if (m.display_symbol == null) m.display_symbol = '';
+  // Migrate single legacy display_symbol → array form.
+  if (!Array.isArray(m.display_symbols)) {
+    m.display_symbols = m.display_symbol ? [m.display_symbol] : [];
+  }
+  if (m.display_rotate_seconds == null) m.display_rotate_seconds = 5;
   if (m.display_invert == null) m.display_invert = false;
   if (!Array.isArray(m.buttons)) m.buttons = [];
   if (!Array.isArray(m.encoders)) m.encoders = [];

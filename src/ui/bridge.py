@@ -10,8 +10,9 @@ from PyQt5.QtWidgets import QFileDialog
 from src.core.action_executor import ActionExecutor
 from src.core.device_manager import DeviceManager
 from src.core.firmware_flasher import FirmwareFlasher
-from src.core.market_data import MarketFetchWorker
+from src.core.market_data import MarketFetchWorker, SYMBOL_CATALOG
 from src.core.updater import Updater
+from src.utils.volume import get_volume_pct
 from src.utils.autostart import is_enabled as autostart_is_enabled, set_enabled as autostart_set_enabled
 from src.utils.constants import APPDATA_DIR
 from src.utils.foreground import get_foreground_process_name
@@ -96,14 +97,24 @@ class Bridge(QObject):
         self._auto_switch_timer.start()
 
         # Market-data fetcher — refreshes the OLED's crypto/currency/
-        # stock view every 60s. Workers are kept on a list so the
-        # QThread refcount stays alive until the request finishes.
-        self._market_target: Optional[Dict[str, str]] = None
+        # stock view. Multiple symbols can be configured per profile;
+        # the rotate timer cycles through them at the user's chosen
+        # interval and the fetch happens fresh on each rotation.
+        # Workers are kept on a list so the QThread refcount stays
+        # alive until the request finishes.
+        self._market_target: Optional[Dict[str, Any]] = None
+        self._market_index: int = 0
         self._market_workers: list = []
-        self._market_timer = QTimer(self)
-        self._market_timer.setInterval(60_000)
-        self._market_timer.timeout.connect(self._fetch_market)
-        self._market_timer.start()
+        self._market_rotate_timer = QTimer(self)
+        self._market_rotate_timer.setInterval(5_000)
+        self._market_rotate_timer.timeout.connect(self._rotate_market)
+
+        # System volume push — when the OLED is in volume mode, we
+        # poll the Windows audio endpoint every second and push.
+        self._volume_timer = QTimer(self)
+        self._volume_timer.setInterval(1_000)
+        self._volume_timer.timeout.connect(self._push_volume)
+        self._volume_timer.start()
 
     # ─────────────── Auto-connect / persistence ───────────────
     def _load_last_config(self) -> Optional[Dict[str, Any]]:
@@ -356,28 +367,57 @@ class Bridge(QObject):
             return False
         self._push_clock()
 
-        # Update market-data target when display mode changes. If the
-        # OLED is switching to a market view, fetch immediately so the
-        # user doesn't see "—" for up to 60 seconds.
+        # Update market-data target when display mode changes. Both
+        # display_symbols (new array form) and display_symbol (legacy
+        # single value) are accepted.
         if mode in ("crypto", "currency", "stock"):
-            symbol = (main_mod.get("display_symbol") or "").strip()
-            if symbol:
-                self._market_target = {"mode": mode, "symbol": symbol}
+            symbols = main_mod.get("display_symbols") or []
+            if not symbols and main_mod.get("display_symbol"):
+                symbols = [main_mod["display_symbol"]]
+            symbols = [str(s).strip() for s in symbols if str(s).strip()]
+            interval = max(2, int(main_mod.get("display_rotate_seconds") or 5))
+            if symbols:
+                self._market_target = {
+                    "mode": mode, "symbols": symbols, "interval": interval,
+                }
+                self._market_index = 0
+                self._market_rotate_timer.setInterval(interval * 1000)
+                # Single symbol → no rotation needed; just fetch once.
+                if len(symbols) > 1:
+                    self._market_rotate_timer.start()
+                else:
+                    self._market_rotate_timer.stop()
                 self._fetch_market()
             else:
                 self._market_target = None
+                self._market_rotate_timer.stop()
         else:
             self._market_target = None
+            self._market_rotate_timer.stop()
         return True
+
+    def _rotate_market(self) -> None:
+        if not self._market_target:
+            return
+        syms = self._market_target.get("symbols") or []
+        if len(syms) <= 1:
+            return
+        self._market_index = (self._market_index + 1) % len(syms)
+        self._fetch_market()
 
     def _fetch_market(self) -> None:
         if not self._market_target:
             return
-        worker = MarketFetchWorker(self._market_target["mode"],
-                                   self._market_target["symbol"])
+        syms = self._market_target.get("symbols") or []
+        if not syms:
+            return
+        idx = self._market_index % len(syms)
+        worker = MarketFetchWorker(self._market_target["mode"], syms[idx])
         worker.result.connect(self._on_market_data)
-        worker.finished.connect(lambda w=worker: self._market_workers.remove(w)
-                                if w in self._market_workers else None)
+        worker.finished.connect(
+            lambda w=worker: self._market_workers.remove(w)
+            if w in self._market_workers else None
+        )
         self._market_workers.append(worker)
         worker.start()
 
@@ -394,6 +434,34 @@ class Bridge(QObject):
             })
         except Exception:
             pass
+
+    def _push_volume(self) -> None:
+        if not self._device.is_connected or not self._cached_profile:
+            return
+        main_mod = next(
+            (m for m in self._cached_profile.get("modules", [])
+             if (m or {}).get("module_type") == "main"),
+            None,
+        )
+        if not main_mod or main_mod.get("display_mode") != "volume":
+            return
+        v = get_volume_pct()
+        if v < 0:
+            return
+        try:
+            self._device.send_config({"cmd": "volume", "level": v})
+        except Exception:
+            pass
+
+    @pyqtSlot(str, result=str)
+    def list_market_symbols(self, mode: str) -> str:
+        """Return JSON list of {symbol, name} for the given market mode."""
+        items = SYMBOL_CATALOG.get(mode, [])
+        return json.dumps([{"symbol": s, "name": n} for s, n in items])
+
+    @pyqtSlot(result=int)
+    def get_system_volume(self) -> int:
+        return get_volume_pct()
 
     def _on_modules_updated(self, modules):
         serialised = [
