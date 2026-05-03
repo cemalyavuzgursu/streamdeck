@@ -48,11 +48,17 @@ const DISPLAY_CLOCK = 'clock';
 const DISPLAY_PROFILE = 'profile_name';
 const DISPLAY_VOLUME = 'volume';
 const DISPLAY_CUSTOM = 'custom_text';
+const DISPLAY_CRYPTO = 'crypto';
+const DISPLAY_CURRENCY = 'currency';
+const DISPLAY_STOCK = 'stock';
 const DISPLAY_MODES = {
   [DISPLAY_CLOCK]: 'Saat',
   [DISPLAY_PROFILE]: 'Aktif Profil',
   [DISPLAY_VOLUME]: 'Ses Seviyesi',
   [DISPLAY_CUSTOM]: 'Özel Metin',
+  [DISPLAY_CRYPTO]: 'Kripto',
+  [DISPLAY_CURRENCY]: 'Döviz',
+  [DISPLAY_STOCK]: 'Hisse',
 };
 
 const STORE_KEY = 'macropad-state-v1';
@@ -76,6 +82,8 @@ function newModule(opts = {}) {
     encoders: Array.from({ length: encoderCount }, newEncoder),
     display_mode: DISPLAY_CLOCK,
     display_custom_text: '',
+    display_symbol: '',
+    display_invert: false,
   };
 }
 function newProfile(name = 'Yeni Profil', modules = []) {
@@ -128,6 +136,8 @@ function normaliseModule(m) {
   if (!m) return m;
   if (m.display_mode == null) m.display_mode = DISPLAY_CLOCK;
   if (m.display_custom_text == null) m.display_custom_text = '';
+  if (m.display_symbol == null) m.display_symbol = '';
+  if (m.display_invert == null) m.display_invert = false;
   if (!Array.isArray(m.buttons)) m.buttons = [];
   if (!Array.isArray(m.encoders)) m.encoders = [];
   return m;
@@ -210,6 +220,7 @@ window.MP = {
   ACTION_NONE, ACTION_SHORTCUT, ACTION_MEDIA, ACTION_APP, ACTION_MACRO, ACTION_PROFILE_SWITCH,
   ACTION_LABELS, ACTION_GLYPHS, ACTION_SHORT,
   MEDIA_ACTIONS,
-  DISPLAY_CLOCK, DISPLAY_PROFILE, DISPLAY_VOLUME, DISPLAY_CUSTOM, DISPLAY_MODES,
+  DISPLAY_CLOCK, DISPLAY_PROFILE, DISPLAY_VOLUME, DISPLAY_CUSTOM,
+  DISPLAY_CRYPTO, DISPLAY_CURRENCY, DISPLAY_STOCK, DISPLAY_MODES,
   uid, newButton, newEncoder, newModule, newProfile,
 };

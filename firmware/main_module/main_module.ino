@@ -29,10 +29,13 @@ constexpr uint8_t I2C_SDA = 5;
 constexpr uint8_t I2C_SCL = 6;
 
 // ─────────────── Display modes (uygulama ile uyumlu) ───────────────
-constexpr const char* MODE_CLOCK   = "clock";
-constexpr const char* MODE_PROFILE = "profile_name";
-constexpr const char* MODE_VOLUME  = "volume";
-constexpr const char* MODE_CUSTOM  = "custom_text";
+constexpr const char* MODE_CLOCK    = "clock";
+constexpr const char* MODE_PROFILE  = "profile_name";
+constexpr const char* MODE_VOLUME   = "volume";
+constexpr const char* MODE_CUSTOM   = "custom_text";
+constexpr const char* MODE_CRYPTO   = "crypto";
+constexpr const char* MODE_CURRENCY = "currency";
+constexpr const char* MODE_STOCK    = "stock";
 
 // ─────────────── Globals ───────────────
 // 1" OLED'ler genelde SH1106 controller kullanır (SSD1306 değil).
@@ -49,6 +52,11 @@ String customText   = "";
 String clockTime    = "--:--";
 String clockDate    = "";
 int    volumeLevel  = -1;             // -1 = bilinmiyor
+String marketLabel  = "";
+String marketValue  = "—";
+String marketChange = "";
+String marketCurrency = "";
+bool   inverted     = false;
 
 bool btnState[BTN_COUNT] = {false};
 unsigned long btnDebounce[BTN_COUNT] = {0};
@@ -117,13 +125,59 @@ void drawCustom() {
   }
 }
 
+void drawMarket() {
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_5x7_tf);
+  const char* topLabel = "PIYASA";
+  if (displayMode == MODE_CRYPTO)   topLabel = "KRIPTO";
+  else if (displayMode == MODE_CURRENCY) topLabel = "DOVIZ";
+  else if (displayMode == MODE_STOCK)    topLabel = "HISSE";
+  oled.drawStr(2, 9, topLabel);
+
+  // Symbol top-right
+  String sym = marketLabel.length() ? marketLabel : String("—");
+  int sw = oled.getStrWidth(sym.c_str());
+  oled.drawStr(126 - sw, 9, sym.c_str());
+
+  // Price big in middle
+  oled.setFont(u8g2_font_helvB14_tf);
+  String val = marketValue.length() ? marketValue : String("—");
+  int vw = oled.getStrWidth(val.c_str());
+  if (vw > 124) vw = 124;
+  oled.drawStr((128 - vw) / 2, 38, val.c_str());
+
+  // Currency suffix small under value
+  oled.setFont(u8g2_font_5x7_tf);
+  if (marketCurrency.length()) {
+    int cw = oled.getStrWidth(marketCurrency.c_str());
+    oled.drawStr((128 - cw) / 2, 50, marketCurrency.c_str());
+  }
+  // Change percent at bottom right (if known)
+  if (marketChange.length()) {
+    String c = marketChange + "%";
+    int chw = oled.getStrWidth(c.c_str());
+    oled.drawStr(126 - chw, 62, c.c_str());
+  }
+  oled.drawStr(2, 62, "USB");
+}
+
 void drawScreen() {
-  if (displayMode == MODE_CLOCK)        drawClock();
-  else if (displayMode == MODE_VOLUME)  drawVolume();
-  else if (displayMode == MODE_CUSTOM)  drawCustom();
-  else                                  drawProfile();
+  if (displayMode == MODE_CLOCK)             drawClock();
+  else if (displayMode == MODE_VOLUME)       drawVolume();
+  else if (displayMode == MODE_CUSTOM)       drawCustom();
+  else if (displayMode == MODE_CRYPTO ||
+           displayMode == MODE_CURRENCY ||
+           displayMode == MODE_STOCK)        drawMarket();
+  else                                       drawProfile();
   oled.sendBuffer();
   lastDraw = millis();
+}
+
+void setInverted(bool inv) {
+  if (inverted == inv) return;
+  inverted = inv;
+  // SH1106 / SSD1306 share the inverse-display command code.
+  oled.sendF("c", inv ? 0xA7 : 0xA6);
 }
 
 void drawBootScreen(const String& bottom) {
@@ -170,7 +224,20 @@ void handleDisplay(JsonVariant root) {
   String newMode = String((const char*)(root["display_mode"] | ""));
   if (newMode.length()) displayMode = newMode;
   customText = String((const char*)(root["display_custom_text"] | ""));
+  setInverted(root["invert"] | false);
   drawScreen();
+}
+
+void handleMarket(JsonVariant root) {
+  marketLabel    = String((const char*)(root["label"] | ""));
+  marketValue    = String((const char*)(root["value"] | "—"));
+  marketChange   = String((const char*)(root["change"] | ""));
+  marketCurrency = String((const char*)(root["currency"] | ""));
+  if (displayMode == MODE_CRYPTO ||
+      displayMode == MODE_CURRENCY ||
+      displayMode == MODE_STOCK) {
+    drawScreen();
+  }
 }
 
 void handleClock(JsonVariant root) {
@@ -196,6 +263,7 @@ void handleLine(const char* line, size_t len) {
   else if (cmd == "display")  handleDisplay(g_doc.as<JsonVariant>());
   else if (cmd == "clock")    handleClock(g_doc.as<JsonVariant>());
   else if (cmd == "volume")   handleVolume(g_doc.as<JsonVariant>());
+  else if (cmd == "market")   handleMarket(g_doc.as<JsonVariant>());
 }
 
 // ─────────────── Setup / Loop ───────────────

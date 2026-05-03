@@ -5,9 +5,21 @@ const {
   ACTION_NONE, ACTION_SHORTCUT, ACTION_MEDIA, ACTION_APP, ACTION_MACRO, ACTION_PROFILE_SWITCH,
   ACTION_LABELS, ACTION_GLYPHS, ACTION_SHORT,
   MEDIA_ACTIONS,
-  DISPLAY_CLOCK, DISPLAY_PROFILE, DISPLAY_VOLUME, DISPLAY_CUSTOM, DISPLAY_MODES,
+  DISPLAY_CLOCK, DISPLAY_PROFILE, DISPLAY_VOLUME, DISPLAY_CUSTOM,
+  DISPLAY_CRYPTO, DISPLAY_CURRENCY, DISPLAY_STOCK, DISPLAY_MODES,
   uid, newButton, newProfile,
 } = window.MP;
+
+const SYMBOL_PLACEHOLDERS = {
+  [DISPLAY_CRYPTO]: 'BTC',
+  [DISPLAY_CURRENCY]: 'USD-TRY',
+  [DISPLAY_STOCK]: 'AAPL',
+};
+const SYMBOL_HINTS = {
+  [DISPLAY_CRYPTO]: 'Örn: BTC, ETH, SOL — CoinGecko adları kabul (bitcoin, ethereum)',
+  [DISPLAY_CURRENCY]: 'Örn: USD-TRY, EUR-USD, GBP-EUR',
+  [DISPLAY_STOCK]: 'Örn: AAPL, MSFT, THYAO.IS (BIST)',
+};
 
 const bridge = window.MP_BRIDGE;
 
@@ -823,6 +835,11 @@ function DisplayInspector({ moduleId }) {
   const { updateActiveProfile, activeProfile } = useStore();
   const mod = activeProfile.modules.find((m) => m.module_id === moduleId);
   if (!mod) return null;
+  const isMarket = (
+    mod.display_mode === DISPLAY_CRYPTO ||
+    mod.display_mode === DISPLAY_CURRENCY ||
+    mod.display_mode === DISPLAY_STOCK
+  );
   return (
     <>
       <div className="field">
@@ -848,6 +865,33 @@ function DisplayInspector({ moduleId }) {
             })} />
         </div>
       )}
+      {isMarket && (
+        <div className="field">
+          <label>Sembol</label>
+          <input className="input mono" value={mod.display_symbol || ''}
+            placeholder={SYMBOL_PLACEHOLDERS[mod.display_mode] || ''}
+            onChange={(e) => updateActiveProfile((p) => {
+              const m = p.modules.find((mm) => mm.module_id === moduleId);
+              if (m) m.display_symbol = e.target.value;
+            })} />
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
+            {SYMBOL_HINTS[mod.display_mode] || ''}
+          </div>
+        </div>
+      )}
+      <div className="field">
+        <label className="check" style={{ cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!mod.display_invert}
+            onChange={(e) => updateActiveProfile((p) => {
+              const m = p.modules.find((mm) => mm.module_id === moduleId);
+              if (m) m.display_invert = e.target.checked;
+            })} />
+          <span className="box" /> Renkleri ters çevir (siyah ↔ beyaz)
+        </label>
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+          OLED tek renk olduğu için tam renk seçimi mümkün değil — sadece ters çevrilebilir.
+        </div>
+      </div>
       <div className="field">
         <label>Modül Adı</label>
         <input className="input" value={mod.name}

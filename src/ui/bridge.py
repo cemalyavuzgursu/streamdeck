@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QFileDialog
 from src.core.action_executor import ActionExecutor
 from src.core.device_manager import DeviceManager
 from src.core.firmware_flasher import FirmwareFlasher
+from src.core.market_data import MarketFetchWorker
 from src.core.updater import Updater
 from src.utils.autostart import is_enabled as autostart_is_enabled, set_enabled as autostart_set_enabled
 from src.utils.constants import APPDATA_DIR
@@ -93,6 +94,16 @@ class Bridge(QObject):
         self._auto_switch_timer.setInterval(1_500)
         self._auto_switch_timer.timeout.connect(self._check_auto_switch)
         self._auto_switch_timer.start()
+
+        # Market-data fetcher — refreshes the OLED's crypto/currency/
+        # stock view every 60s. Workers are kept on a list so the
+        # QThread refcount stays alive until the request finishes.
+        self._market_target: Optional[Dict[str, str]] = None
+        self._market_workers: list = []
+        self._market_timer = QTimer(self)
+        self._market_timer.setInterval(60_000)
+        self._market_timer.timeout.connect(self._fetch_market)
+        self._market_timer.start()
 
     # ─────────────── Auto-connect / persistence ───────────────
     def _load_last_config(self) -> Optional[Dict[str, Any]]:
@@ -326,32 +337,63 @@ class Bridge(QObject):
         self._cached_profile = profile
         self._save_last_config()
 
-        # The firmware only needs OLED data: profile name, mode, custom
-        # text. Sending the full module/buttons/encoders array as JSON
-        # was hitting intermittent InvalidInput parse failures for
-        # reasons we couldn't pin down — and the firmware never used
-        # those fields anyway. A ~80-byte display payload removes the
-        # whole class of problem.
         main_mod = next(
             (m for m in profile.get("modules", [])
              if (m or {}).get("module_type") == "main"),
             {},
         )
+        mode = main_mod.get("display_mode", "profile_name")
         payload = {
             "cmd": "display",
             "profile_name": profile.get("name", ""),
-            "display_mode": main_mod.get("display_mode", "profile_name"),
+            "display_mode": mode,
             "display_custom_text": main_mod.get("display_custom_text", ""),
+            "invert": bool(main_mod.get("display_invert", False)),
         }
         try:
             self._device.send_config(payload)
         except Exception:
             return False
-        # Immediately follow up with the current time. If the user just
-        # switched the OLED to clock mode, this avoids a "--:--" stall
-        # until the next 30-second tick.
         self._push_clock()
+
+        # Update market-data target when display mode changes. If the
+        # OLED is switching to a market view, fetch immediately so the
+        # user doesn't see "—" for up to 60 seconds.
+        if mode in ("crypto", "currency", "stock"):
+            symbol = (main_mod.get("display_symbol") or "").strip()
+            if symbol:
+                self._market_target = {"mode": mode, "symbol": symbol}
+                self._fetch_market()
+            else:
+                self._market_target = None
+        else:
+            self._market_target = None
         return True
+
+    def _fetch_market(self) -> None:
+        if not self._market_target:
+            return
+        worker = MarketFetchWorker(self._market_target["mode"],
+                                   self._market_target["symbol"])
+        worker.result.connect(self._on_market_data)
+        worker.finished.connect(lambda w=worker: self._market_workers.remove(w)
+                                if w in self._market_workers else None)
+        self._market_workers.append(worker)
+        worker.start()
+
+    def _on_market_data(self, data: dict) -> None:
+        if not self._device.is_connected:
+            return
+        try:
+            self._device.send_config({
+                "cmd": "market",
+                "label": data.get("label", ""),
+                "value": data.get("value", ""),
+                "change": data.get("change", ""),
+                "currency": data.get("currency", ""),
+            })
+        except Exception:
+            pass
 
     def _on_modules_updated(self, modules):
         serialised = [
