@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "MacroPad Configurator"
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.12.0"
 
 if sys.platform == "win32":
     APPDATA_DIR = Path(os.environ.get("APPDATA", "~")) / "MacroPad"

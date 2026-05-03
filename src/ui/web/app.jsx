@@ -81,7 +81,7 @@ function Topbar({ onOpenFlash }) {
 
       <div className={`status-pill ${state.connected ? 'live' : ''}`}>
         <span className="dot" />
-        {state.connected ? `${state.selectedPort} · ESP32-C3` : 'Bağlı değil'}
+        {state.connected ? `Bağlı · ${state.selectedPort}` : 'Bağlı değil'}
       </div>
 
       <div className="port-group">
@@ -1057,7 +1057,8 @@ function ConnectionWatcher() {
   const { setState } = useStore();
 
   useEffect(() => {
-    if (!bridge || !bridge.device_connection_changed) return;
+    if (!bridge) return;
+
     const onChange = (connected, port) => {
       setState((s) => ({
         ...s,
@@ -1065,20 +1066,30 @@ function ConnectionWatcher() {
         selectedPort: port || s.selectedPort,
       }));
     };
-    bridge.device_connection_changed.connect(onChange);
-    // Auto-connect can fire before this component subscribes — query
-    // current state right after subscribing so we don't miss the
-    // initial signal.
-    if (bridge.get_connection_state) {
-      bridge.get_connection_state((js) => {
-        try {
-          const s = JSON.parse(js);
-          if (s && s.connected) onChange(true, s.port);
-        } catch {}
-      });
+
+    if (bridge.device_connection_changed) {
+      bridge.device_connection_changed.connect(onChange);
     }
+
+    // Poll snapshot — signals can race with React mount, and a
+    // periodic re-check here costs almost nothing and guarantees
+    // the topbar matches reality even if a signal got dropped.
+    const poll = () => {
+      if (bridge.get_connection_state) {
+        bridge.get_connection_state((js) => {
+          try {
+            const s = JSON.parse(js);
+            if (s) onChange(!!s.connected, s.port || '');
+          } catch {}
+        });
+      }
+    };
+    poll();
+    const id = setInterval(poll, 3000);
+
     return () => {
-      try { bridge.device_connection_changed.disconnect(onChange); } catch {}
+      clearInterval(id);
+      try { bridge.device_connection_changed && bridge.device_connection_changed.disconnect(onChange); } catch {}
     };
   }, [setState]);
 
@@ -1095,10 +1106,19 @@ function ActionRouter() {
   const { state, setState, activeProfile, showToast } = useStore();
 
   // Keep the bridge's cached profile in sync with the active one so
-  // button presses dispatch even before the user hits "Cihaza Gönder".
+  // button presses dispatch immediately. Also auto-push the display
+  // payload to the device — debounced 250ms so rapid edits in the
+  // inspector don't spam serial. This makes "Cihaza Gönder" optional;
+  // the OLED follows whatever the active profile is set to.
   useEffect(() => {
-    if (!bridge || !bridge.cache_profile || !activeProfile) return;
-    bridge.cache_profile(JSON.stringify(activeProfile));
+    if (!bridge || !activeProfile) return;
+    const payload = JSON.stringify(activeProfile);
+    if (bridge.cache_profile) bridge.cache_profile(payload);
+    if (!bridge.send_config) return;
+    const t = setTimeout(() => {
+      bridge.send_config(payload, () => {});
+    }, 250);
+    return () => clearTimeout(t);
   }, [activeProfile]);
 
   // profile_switch_requested fires when a physical button is mapped to
