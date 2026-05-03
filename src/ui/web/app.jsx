@@ -116,9 +116,13 @@ function Sidebar({ onAddModule }) {
   const { state, setState, showToast, activeProfile } = useStore();
   const [renamingId, setRenamingId] = useState(null);
   const [renameVal, setRenameVal] = useState('');
+  const [triggersFor, setTriggersFor] = useState(null);  // profile id whose triggers we're editing
   const fileInput = useRef();
 
-  const select = (id) => setState((s) => ({ ...s, activeProfileId: id, selection: null }));
+  const select = (id) => {
+    if (bridge && bridge.note_manual_switch) bridge.note_manual_switch();
+    setState((s) => ({ ...s, activeProfileId: id, selection: null }));
+  };
 
   const addProfile = () => {
     const p = newProfile(`Profil ${state.profiles.length + 1}`);
@@ -204,6 +208,7 @@ function Sidebar({ onAddModule }) {
                   <span className="profile-name">{p.name}</span>
                   <span className="profile-meta">{meta}</span>
                   <span className="row-actions" onClick={(e) => e.stopPropagation()}>
+                    <button className="icon-btn" title="Otomatik geçiş kuralları" onClick={() => setTriggersFor(p.id)}>⚙</button>
                     <button className="icon-btn" title="Yeniden adlandır" onClick={() => startRename(p)}>✎</button>
                     <button className="icon-btn" title="Kopyala" onClick={() => duplicate(p.id)}>⧉</button>
                     <button className="icon-btn danger" title="Sil" onClick={() => remove(p.id)}>✕</button>
@@ -223,7 +228,92 @@ function Sidebar({ onAddModule }) {
           <input type="file" ref={fileInput} accept=".json" hidden onChange={importProfile} />
         </div>
       </div>
+      {triggersFor && (
+        <ProfileTriggersModal
+          profileId={triggersFor}
+          onClose={() => setTriggersFor(null)}
+        />
+      )}
     </aside>
+  );
+}
+
+// ───────── Profile triggers modal ─────────
+function ProfileTriggersModal({ profileId, onClose }) {
+  const { state, setState, showToast } = useStore();
+  const profile = state.profiles.find((p) => p.id === profileId);
+  if (!profile) return null;
+
+  const triggers = profile.triggers || { foreground_apps: [], time_windows: [] };
+  const [appsText, setAppsText] = useState((triggers.foreground_apps || []).join('\n'));
+  const [windows, setWindows] = useState(triggers.time_windows || []);
+
+  const save = () => {
+    const apps = appsText.split('\n').map((s) => s.trim()).filter(Boolean);
+    setState((s) => ({
+      ...s,
+      profiles: s.profiles.map((p) => p.id === profileId ? {
+        ...p,
+        triggers: {
+          foreground_apps: apps,
+          time_windows: windows.filter((w) => w.from && w.to),
+        },
+      } : p),
+    }));
+    showToast('Kurallar kaydedildi');
+    onClose();
+  };
+
+  const addWindow = () => setWindows((w) => [...w, { from: '09:00', to: '17:00' }]);
+  const updateWindow = (i, field, val) => setWindows((w) => w.map((x, j) => j === i ? { ...x, [field]: val } : x));
+  const removeWindow = (i) => setWindows((w) => w.filter((_, j) => j !== i));
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div className="ttl">"{profile.name}" — Otomatik Geçiş</div>
+          <button className="icon-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div className="field">
+            <label>Bu uygulamalar açıkken bu profile geç</label>
+            <textarea className="textarea" value={appsText}
+              placeholder={'spotify.exe\nchrome.exe\nsteam.exe'}
+              onChange={(e) => setAppsText(e.target.value)} />
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
+              Her satıra bir uygulama adı (örn. spotify.exe). Büyük/küçük harf önemsiz.
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Saat aralıklarında bu profile geç</label>
+            {windows.length === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>
+                Henüz saat aralığı eklenmemiş.
+              </div>
+            )}
+            {windows.map((w, i) => (
+              <div key={i} className="row" style={{ marginBottom: 6, gap: 8 }}>
+                <input className="input mono" type="time" value={w.from || ''}
+                  style={{ width: 110 }}
+                  onChange={(e) => updateWindow(i, 'from', e.target.value)} />
+                <span style={{ color: 'var(--muted)' }}>—</span>
+                <input className="input mono" type="time" value={w.to || ''}
+                  style={{ width: 110 }}
+                  onChange={(e) => updateWindow(i, 'to', e.target.value)} />
+                <button className="icon-btn danger" onClick={() => removeWindow(i)}>✕</button>
+              </div>
+            ))}
+            <button className="btn ghost sm" onClick={addWindow}>＋ Aralık Ekle</button>
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button className="btn ghost" onClick={onClose}>İptal</button>
+          <button className="btn accent" onClick={save}>Kaydet</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1034,13 +1124,39 @@ function Canvas({ onAddModule }) {
 
 // ───────── Footer ─────────
 function Footer() {
-  const { state, activeProfile } = useStore();
+  const { state, activeProfile, showToast } = useStore();
   const totalKeys = activeProfile?.modules.reduce((s, m) => s + m.button_count, 0) || 0;
   const totalEnc = activeProfile?.modules.reduce((s, m) => s + m.encoder_count, 0) || 0;
+  const [autostart, setAutostart] = useState(false);
+
+  useEffect(() => {
+    if (!bridge || !bridge.autostart_enabled) return;
+    bridge.autostart_enabled((on) => setAutostart(!!on));
+  }, []);
+
+  const toggleAutostart = (e) => {
+    const want = e.target.checked;
+    if (!bridge || !bridge.autostart_set) return;
+    bridge.autostart_set(want, (ok) => {
+      if (ok) {
+        setAutostart(want);
+        showToast(want ? 'Başlangıçta açılacak' : 'Başlangıçta kapalı');
+      } else {
+        showToast('Yalnızca .exe sürümünde çalışır');
+      }
+    });
+  };
+
   return (
     <div className="footer">
       <span>profile <span style={{ color: 'var(--ink)' }}>"{activeProfile?.name}"</span></span>
       <span>{totalKeys} keys · {totalEnc} encoders</span>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+        title="Windows başlarken arka planda otomatik aç">
+        <input type="checkbox" checked={autostart} onChange={toggleAutostart}
+          style={{ margin: 0, cursor: 'pointer' }} />
+        autostart
+      </label>
       <span className="grow" />
       <span>baud 115200</span>
       <span>{state.connected ? <span className="ok">● connected</span> : '○ offline'}</span>
@@ -1120,6 +1236,13 @@ function ActionRouter() {
     }, 250);
     return () => clearTimeout(t);
   }, [activeProfile]);
+
+  // Push the full profile list to the bridge so it can match
+  // foreground-app / time triggers without polling React.
+  useEffect(() => {
+    if (!bridge || !bridge.cache_profiles) return;
+    bridge.cache_profiles(JSON.stringify(state.profiles));
+  }, [state.profiles]);
 
   // profile_switch_requested fires when a physical button is mapped to
   // ACTION_PROFILE_SWITCH and gets pressed.

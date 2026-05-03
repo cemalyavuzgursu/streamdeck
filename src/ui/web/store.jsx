@@ -79,7 +79,12 @@ function newModule(opts = {}) {
   };
 }
 function newProfile(name = 'Yeni Profil', modules = []) {
-  return { id: uid(), name, modules };
+  return {
+    id: uid(),
+    name,
+    modules,
+    triggers: { foreground_apps: [], time_windows: [] },
+  };
 }
 
 function defaultState() {
@@ -128,6 +133,17 @@ function normaliseModule(m) {
   return m;
 }
 
+function normaliseProfile(p) {
+  if (!p) return p;
+  if (!p.triggers || typeof p.triggers !== 'object') {
+    p.triggers = { foreground_apps: [], time_windows: [] };
+  } else {
+    if (!Array.isArray(p.triggers.foreground_apps)) p.triggers.foreground_apps = [];
+    if (!Array.isArray(p.triggers.time_windows)) p.triggers.time_windows = [];
+  }
+  return p;
+}
+
 function StoreProvider({ children }) {
   const [state, setState] = useState(() => {
     try {
@@ -135,7 +151,10 @@ function StoreProvider({ children }) {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.profiles) && parsed.profiles.length) {
-          parsed.profiles.forEach((p) => (p.modules || []).forEach(normaliseModule));
+          parsed.profiles.forEach((p) => {
+            normaliseProfile(p);
+            (p.modules || []).forEach(normaliseModule);
+          });
           parsed.connected = false;
           parsed.selection = null;
           return parsed;

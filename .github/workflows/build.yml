@@ -46,14 +46,19 @@ jobs:
           with open(path, 'w') as f:
               json.dump(data, f, indent=2)
 
+      - name: Generate app icon
+        run: python assets/icon_gen.py
+
       - name: Build executable
         run: >
           pyinstaller
           --onefile
           --windowed
           --name MacroPad
+          --icon assets/icon.ico
           --add-data "version.json;."
           --add-data "src/ui/web;src/ui/web"
+          --add-data "assets/icon.ico;assets"
           --collect-all certifi
           --collect-submodules requests
           --collect-submodules pynput

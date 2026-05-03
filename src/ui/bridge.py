@@ -11,7 +11,9 @@ from src.core.action_executor import ActionExecutor
 from src.core.device_manager import DeviceManager
 from src.core.firmware_flasher import FirmwareFlasher
 from src.core.updater import Updater
+from src.utils.autostart import is_enabled as autostart_is_enabled, set_enabled as autostart_set_enabled
 from src.utils.constants import APPDATA_DIR
+from src.utils.foreground import get_foreground_process_name
 
 
 _LAST_CONFIG_PATH = APPDATA_DIR / "last_config.json"
@@ -53,7 +55,14 @@ class Bridge(QObject):
         self._flasher: Optional[FirmwareFlasher] = None
         self._executor = ActionExecutor()
         self._cached_profile: Optional[Dict[str, Any]] = self._load_last_config()
+        self._all_profiles: list = []
         self._auto_disabled_port: str = ""  # set when user manually disconnects
+
+        # Auto-switch state — last process we evaluated, last manual
+        # override timestamp (so a user-driven switch isn't immediately
+        # undone by the auto-switcher).
+        self._last_proc_name: str = ""
+        self._manual_override_until: float = 0.0
 
         # The firmware has no RTC, so we push the current wall-clock time
         # every 30s. The OLED only redraws if it's in CLOCK mode.
@@ -77,6 +86,13 @@ class Bridge(QObject):
         # Run once immediately so the device picks up on app launch
         # without waiting two seconds.
         QTimer.singleShot(500, self._try_auto_connect)
+
+        # Auto-switch profile based on foreground app + time-of-day rules
+        # registered on each profile.
+        self._auto_switch_timer = QTimer(self)
+        self._auto_switch_timer.setInterval(1_500)
+        self._auto_switch_timer.timeout.connect(self._check_auto_switch)
+        self._auto_switch_timer.start()
 
     # ─────────────── Auto-connect / persistence ───────────────
     def _load_last_config(self) -> Optional[Dict[str, Any]]:
@@ -223,6 +239,78 @@ class Bridge(QObject):
             self._save_last_config()
         except json.JSONDecodeError:
             pass
+
+    @pyqtSlot(str)
+    def cache_profiles(self, profiles_json: str) -> None:
+        """Receive the full profile list so auto-switch can find matches."""
+        try:
+            data = json.loads(profiles_json)
+            if isinstance(data, list):
+                self._all_profiles = data
+        except json.JSONDecodeError:
+            pass
+
+    @pyqtSlot()
+    def note_manual_switch(self) -> None:
+        """User just changed the active profile manually — pause auto-switch
+        for ~10 seconds so they don't get yanked back instantly."""
+        import time
+        self._manual_override_until = time.time() + 10.0
+
+    # ─────────────── Auto-switch ───────────────
+    def _time_in_window(self, now, tw: dict) -> bool:
+        try:
+            frm = tw.get("from", "")
+            to = tw.get("to", "")
+            if not frm or not to:
+                return False
+            fh, fm = (int(x) for x in frm.split(":"))
+            th, tm = (int(x) for x in to.split(":"))
+            cur = now.hour * 60 + now.minute
+            a = fh * 60 + fm
+            b = th * 60 + tm
+            if a <= b:
+                return a <= cur < b
+            # window wraps midnight (e.g. 22:00 → 02:00)
+            return cur >= a or cur < b
+        except (ValueError, AttributeError):
+            return False
+
+    def _check_auto_switch(self) -> None:
+        import time
+        if time.time() < self._manual_override_until:
+            return
+        if not self._all_profiles or not self._cached_profile:
+            return
+        current_id = str(self._cached_profile.get("id", ""))
+        proc = get_foreground_process_name().lower()
+        self._last_proc_name = proc
+        now = datetime.now()
+
+        for profile in self._all_profiles:
+            triggers = (profile or {}).get("triggers") or {}
+            apps = [str(a).lower() for a in triggers.get("foreground_apps", []) if a]
+            windows = triggers.get("time_windows", []) or []
+            if not apps and not windows:
+                continue
+            target_id = str((profile or {}).get("id", ""))
+            if not target_id or target_id == current_id:
+                continue
+            if proc and apps and proc in apps:
+                self.profile_switch_requested.emit(target_id)
+                return
+            if windows and any(self._time_in_window(now, w) for w in windows):
+                self.profile_switch_requested.emit(target_id)
+                return
+
+    # ─────────────── Autostart ───────────────
+    @pyqtSlot(result=bool)
+    def autostart_enabled(self) -> bool:
+        return autostart_is_enabled()
+
+    @pyqtSlot(bool, result=bool)
+    def autostart_set(self, on: bool) -> bool:
+        return autostart_set_enabled(on)
 
     @pyqtSlot(str, result=bool)
     def send_config(self, profile_json: str) -> bool:
