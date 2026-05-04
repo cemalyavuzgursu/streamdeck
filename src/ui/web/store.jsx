@@ -97,29 +97,19 @@ function newProfile(name = 'Yeni Profil', modules = []) {
 }
 
 function defaultState() {
-  const main = newModule({ name: 'Ana Modül', module_type: 'main', button_count: 4, encoder_count: 1, has_display: true });
-  main.buttons[0] = { action_type: ACTION_APP, action_data: { path: 'C:\\\\Users\\\\me\\\\Spotify.exe', args: '' }, label: 'Spotify' };
-  main.buttons[1] = { action_type: ACTION_SHORTCUT, action_data: { keys: 'ctrl+shift+m' }, label: 'Mute Mic' };
-  main.buttons[2] = { action_type: ACTION_MEDIA, action_data: { action: 'play_pause' }, label: 'Play' };
-  main.buttons[3] = { action_type: ACTION_PROFILE_SWITCH, action_data: {}, label: 'Gaming' };
-  main.encoders[0].cw = { action_type: ACTION_MEDIA, action_data: { action: 'volume_up' }, label: 'Vol +' };
-  main.encoders[0].ccw = { action_type: ACTION_MEDIA, action_data: { action: 'volume_down' }, label: 'Vol −' };
-  main.encoders[0].push = { action_type: ACTION_MEDIA, action_data: { action: 'mute' }, label: 'Mute' };
-
-  const right = newModule({ name: 'Sağ Modül', module_type: 'slave', button_count: 8, encoder_count: 0 });
-  right.buttons[0] = { action_type: ACTION_SHORTCUT, action_data: { keys: 'ctrl+c' }, label: 'Copy' };
-  right.buttons[1] = { action_type: ACTION_SHORTCUT, action_data: { keys: 'ctrl+v' }, label: 'Paste' };
-  right.buttons[2] = { action_type: ACTION_SHORTCUT, action_data: { keys: 'ctrl+z' }, label: 'Undo' };
-  right.buttons[3] = { action_type: ACTION_SHORTCUT, action_data: { keys: 'ctrl+shift+z' }, label: 'Redo' };
-
-  const def = newProfile('Varsayılan', [main, right]);
-  const gaming = newProfile('Gaming', [newModule({ name: 'Ana Modül', module_type: 'main', button_count: 4, encoder_count: 1, has_display: true })]);
-  const work = newProfile('Work', [newModule({ name: 'Ana Modül', module_type: 'main', button_count: 4, encoder_count: 1, has_display: true })]);
+  // Fresh installs start empty — modules are discovered from the
+  // physical hardware on first connect, and assignments live on per
+  // profile from there. Showing fake "Spotify / Mute Mic / Play"
+  // seed buttons before a device exists confuses the user about
+  // what's real.
+  const def = newProfile('Varsayılan', []);
+  const gaming = newProfile('Gaming', []);
+  const work = newProfile('Work', []);
 
   return {
     profiles: [def, gaming, work],
     activeProfileId: def.id,
-    selectedPort: 'COM3',
+    selectedPort: '',
     connected: false,
     selection: null, // { moduleId, kind: 'button'|'encoder'|'display', index, sub? }
   };

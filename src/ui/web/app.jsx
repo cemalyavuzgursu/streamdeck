@@ -1285,8 +1285,10 @@ function FlashModal({ onClose }) {
 
 // ───────── Canvas ─────────
 function Canvas({ onAddModule }) {
-  const { activeProfile } = useStore();
+  const { state, activeProfile } = useStore();
   if (!activeProfile) return null;
+
+  const empty = activeProfile.modules.length === 0;
 
   return (
     <main className="canvas">
@@ -1295,15 +1297,32 @@ function Canvas({ onAddModule }) {
           <h1>{activeProfile.name}</h1>
           <div className="sub">{activeProfile.modules.length} modül · {activeProfile.modules.reduce((s, m) => s + m.button_count, 0)} tuş</div>
         </div>
-        <button className="btn" onClick={onAddModule}>＋ Modül</button>
+        {!empty && <button className="btn" onClick={onAddModule}>＋ Modül</button>}
       </div>
 
-      {activeProfile.modules.length === 0 ? (
-        <div className="empty-state">
-          <h2>Bu profil boş</h2>
-          <p>Bir modül ekleyerek başlayın veya bağlı cihazdan otomatik algılayın.</p>
-          <button className="btn accent" onClick={onAddModule}>＋ Modül Ekle</button>
-        </div>
+      {empty ? (
+        !state.connected ? (
+          <div className="empty-state">
+            <h2>Cihaz bağlı değil</h2>
+            <p>
+              ESP32-C3'ünüzü USB ile takın. Bağlandığında modüller otomatik
+              algılanır; butonları, encoder'ları ve OLED ekranı bu profilden
+              yapılandırırsınız.
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--muted-2)', marginTop: 12 }}>
+              Cihaz görünmüyorsa firmware yüklü ve USB-C kablosu bağlı mı kontrol edin.
+            </p>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <h2>Modüller algılanıyor…</h2>
+            <p>
+              Cihaz bağlı, modül listesi bekleniyor. Birkaç saniye sürerse
+              firmware'in {`{cmd:"discover"}`} komutuna cevap vermesi gerekir.
+            </p>
+            <button className="btn ghost" onClick={onAddModule}>Manuel modül ekle</button>
+          </div>
+        )
       ) : (
         <div className="modules-stack">
           {activeProfile.modules.map((m, i) => (
