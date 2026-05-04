@@ -1,9 +1,10 @@
 """Lightweight market data fetchers for the OLED.
 
 All endpoints are free and require no API key:
-  - crypto:   api.coingecko.com  (BTC, ETH, etc.)
-  - currency: api.frankfurter.app (USD, EUR, TRY, ...)
-  - stock:    query1.finance.yahoo.com (AAPL, TSLA, ...)
+  - crypto:    api.coingecko.com  (BTC, ETH, etc.)
+  - currency:  api.frankfurter.app (USD, EUR, TRY, ...)
+  - stock:     query1.finance.yahoo.com (AAPL, TSLA, ...)
+  - commodity: query1.finance.yahoo.com (GC=F gold, SI=F silver, ...)
 
 Each fetcher returns a dict with at least value + change_pct, or None
 on failure. Network calls happen in a QThread so the UI never blocks.
@@ -95,6 +96,23 @@ SYMBOL_CATALOG = {
         ("FROTO.IS", "Ford Otosan (BIST)"),
         ("BIMAS.IS", "BİM (BIST)"),
     ],
+    "commodity": [
+        ("GC=F", "Altın (USD/ons)"),
+        ("SI=F", "Gümüş (USD/ons)"),
+        ("PL=F", "Platin (USD/ons)"),
+        ("PA=F", "Paladyum (USD/ons)"),
+        ("HG=F", "Bakır (USD/lb)"),
+        ("CL=F", "Ham Petrol WTI (USD/varil)"),
+        ("BZ=F", "Brent Petrol (USD/varil)"),
+        ("NG=F", "Doğalgaz (USD/MMBtu)"),
+        ("XAUTRY=X", "Altın / TL (ons)"),
+        ("XAUUSD=X", "Altın / USD (ons)"),
+        ("XAGUSD=X", "Gümüş / USD (ons)"),
+        ("^GSPC", "S&P 500"),
+        ("^DJI", "Dow Jones"),
+        ("^IXIC", "Nasdaq"),
+        ("XU100.IS", "BIST 100"),
+    ],
 }
 
 
@@ -185,6 +203,38 @@ def fetch_stock(symbol: str) -> Optional[dict]:
         return None
 
 
+def fetch_commodity(symbol: str) -> Optional[dict]:
+    """Commodities/indices route through Yahoo Finance (same shape as stock)."""
+    return fetch_stock(symbol)
+
+
+def fetch_market(item) -> Optional[dict]:
+    """Dispatch to the right fetcher based on the item's `type`.
+
+    `item` may be either a dict {symbol, type} or a (symbol, type) tuple.
+    A bare string is treated as a stock for backwards compatibility.
+    """
+    if isinstance(item, str):
+        symbol, kind = item, "stock"
+    elif isinstance(item, dict):
+        symbol = str(item.get("symbol", "")).strip()
+        kind = str(item.get("type", "stock")).strip().lower()
+    else:
+        try:
+            symbol, kind = item
+        except (TypeError, ValueError):
+            return None
+    if not symbol:
+        return None
+    if kind == "crypto":
+        return fetch_crypto(symbol)
+    if kind == "currency":
+        return fetch_currency(symbol)
+    if kind == "commodity":
+        return fetch_commodity(symbol)
+    return fetch_stock(symbol)
+
+
 def _format_value(v) -> str:
     """Compact human-friendly value for the OLED."""
     try:
@@ -203,25 +253,23 @@ def _format_value(v) -> str:
 
 
 class MarketFetchWorker(QThread):
-    """One-shot worker — fetches a single symbol then emits result/none."""
+    """One-shot worker — fetches a single symbol then emits result/none.
+
+    `kind` is the per-symbol type (crypto/currency/stock/commodity). The
+    legacy display modes pass it through directly.
+    """
     result = pyqtSignal(dict)
     failed = pyqtSignal()
 
-    def __init__(self, mode: str, symbol: str):
+    def __init__(self, kind: str, symbol: str):
         super().__init__()
-        self._mode = mode
+        self._kind = kind
         self._symbol = symbol
 
     def run(self):
-        if self._mode == "crypto":
-            data = fetch_crypto(self._symbol)
-        elif self._mode == "currency":
-            data = fetch_currency(self._symbol)
-        elif self._mode == "stock":
-            data = fetch_stock(self._symbol)
-        else:
-            data = None
+        data = fetch_market({"symbol": self._symbol, "type": self._kind})
         if data:
+            data["category"] = self._kind
             self.result.emit(data)
         else:
             self.failed.emit()

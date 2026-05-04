@@ -1,4 +1,4 @@
-/* global React, MP */
+/* global React, ReactDOM, MP */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 const {
   useStore,
@@ -6,19 +6,16 @@ const {
   ACTION_LABELS, ACTION_GLYPHS, ACTION_SHORT,
   MEDIA_ACTIONS,
   DISPLAY_CLOCK, DISPLAY_PROFILE, DISPLAY_VOLUME, DISPLAY_CUSTOM,
-  DISPLAY_CRYPTO, DISPLAY_CURRENCY, DISPLAY_STOCK, DISPLAY_MODES,
+  DISPLAY_MARKET, MARKET_TYPE_LABELS, DISPLAY_MODES,
   uid, newButton, newProfile,
 } = window.MP;
 
-const SYMBOL_PLACEHOLDERS = {
-  [DISPLAY_CRYPTO]: 'BTC',
-  [DISPLAY_CURRENCY]: 'USD-TRY',
-  [DISPLAY_STOCK]: 'AAPL',
-};
-const SYMBOL_HINTS = {
-  [DISPLAY_CRYPTO]: 'Örn: BTC, ETH, SOL — CoinGecko adları kabul (bitcoin, ethereum)',
-  [DISPLAY_CURRENCY]: 'Örn: USD-TRY, EUR-USD, GBP-EUR',
-  [DISPLAY_STOCK]: 'Örn: AAPL, MSFT, THYAO.IS (BIST)',
+const MARKET_TYPES = ['crypto', 'currency', 'stock', 'commodity'];
+const MARKET_TYPE_PLACEHOLDERS = {
+  crypto: 'BTC',
+  currency: 'USD-TRY',
+  stock: 'AAPL',
+  commodity: 'GC=F',
 };
 
 const bridge = window.MP_BRIDGE;
@@ -388,7 +385,7 @@ function OledPreview({ mode, customText, profileName }) {
   const now = new Date();
   const time = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
   const date = now.toLocaleDateString('tr-TR');
-  const isMarket = mode === DISPLAY_CRYPTO || mode === DISPLAY_CURRENCY || mode === DISPLAY_STOCK;
+  const isMarket = mode === DISPLAY_MARKET;
 
   return (
     <div className="oled-frame">
@@ -420,9 +417,7 @@ function OledPreview({ mode, customText, profileName }) {
         )}
         {isMarket && (
           <>
-            <div className="oled-label">
-              {mode === DISPLAY_CRYPTO ? 'KRİPTO' : mode === DISPLAY_CURRENCY ? 'DÖVİZ' : 'HİSSE'}
-            </div>
+            <div className="oled-label">PİYASALAR</div>
             <div className="oled-big" style={{ fontSize: 18, color: '#8aa6c0' }}>
               canlı veri
             </div>
@@ -864,40 +859,62 @@ function ProfileSwitchEditor({ cfg, setCfg }) {
   );
 }
 
-function SymbolPickerModal({ mode, onClose, onPick }) {
+function SymbolPickerModal({ onClose, onPick }) {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('all');
 
   useEffect(() => {
     if (!bridge || !bridge.list_market_symbols) {
       setLoading(false);
       return;
     }
-    bridge.list_market_symbols(mode, (js) => {
+    bridge.list_market_symbols('market', (js) => {
       try { setItems(JSON.parse(js) || []); }
       catch { setItems([]); }
       setLoading(false);
     });
-  }, [mode]);
+  }, []);
 
   const f = filter.trim().toLowerCase();
-  const filtered = f
-    ? items.filter((it) =>
-        it.symbol.toLowerCase().includes(f) || it.name.toLowerCase().includes(f))
-    : items;
+  const filtered = items
+    .filter((it) => tab === 'all' || it.type === tab)
+    .filter((it) => !f
+      || it.symbol.toLowerCase().includes(f)
+      || (it.name || '').toLowerCase().includes(f));
 
-  return (
+  // Render into document.body so a tall inspector list can't push the
+  // picker off-screen, and so any ancestor with `transform`/`filter`
+  // (which would otherwise re-anchor `position: fixed`) can't trap us.
+  const tabs = [
+    { id: 'all', label: 'Tümü' },
+    { id: 'crypto', label: MARKET_TYPE_LABELS.crypto },
+    { id: 'currency', label: MARKET_TYPE_LABELS.currency },
+    { id: 'stock', label: MARKET_TYPE_LABELS.stock },
+    { id: 'commodity', label: MARKET_TYPE_LABELS.commodity },
+  ];
+
+  const node = (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 480, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+      <div className="modal" style={{ maxWidth: 520, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div className="ttl">Sembol Seç</div>
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
-        <div style={{ padding: '12px 20px 8px' }}>
+        <div style={{ padding: '12px 20px 6px' }}>
           <input className="input" autoFocus placeholder="Ara…"
             value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </div>
+        <div className="row" style={{ gap: 4, padding: '4px 16px 8px', flexWrap: 'wrap' }}>
+          {tabs.map((t) => (
+            <button key={t.id}
+              className={`btn sm ${tab === t.id ? 'primary' : 'ghost'}`}
+              onClick={() => setTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
         </div>
         <div style={{ overflowY: 'auto', padding: '0 12px 12px', flex: 1 }}>
           {loading && <div style={{ padding: 20, color: 'var(--muted)' }}>Yükleniyor…</div>}
@@ -907,19 +924,24 @@ function SymbolPickerModal({ mode, onClose, onPick }) {
             </div>
           )}
           {filtered.map((it) => (
-            <div key={it.symbol}
-              onClick={() => { onPick(it.symbol); onClose(); }}
-              style={{ padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+            <div key={`${it.type}:${it.symbol}`}
+              onClick={() => { onPick(it); onClose(); }}
+              style={{ padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                       display: 'flex', alignItems: 'center', gap: 10 }}
               onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-2)'}
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, marginRight: 10 }}>{it.symbol}</span>
-              <span style={{ color: 'var(--muted)' }}>{it.name}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, minWidth: 90 }}>{it.symbol}</span>
+              <span style={{ color: 'var(--muted)', flex: 1 }}>{it.name}</span>
+              <span className="pill" style={{ fontSize: 10 }}>
+                {MARKET_TYPE_LABELS[it.type] || it.type}
+              </span>
             </div>
           ))}
         </div>
       </div>
     </div>
   );
+  return ReactDOM.createPortal(node, document.body);
 }
 
 function DisplayInspector({ moduleId }) {
@@ -927,22 +949,26 @@ function DisplayInspector({ moduleId }) {
   const mod = activeProfile.modules.find((m) => m.module_id === moduleId);
   const [pickerOpen, setPickerOpen] = useState(false);
   if (!mod) return null;
-  const isMarket = (
-    mod.display_mode === DISPLAY_CRYPTO ||
-    mod.display_mode === DISPLAY_CURRENCY ||
-    mod.display_mode === DISPLAY_STOCK
+  const isMarket = mod.display_mode === DISPLAY_MARKET;
+
+  const symbols = (mod.display_symbols || []).map((s) =>
+    typeof s === 'string' ? { symbol: s, type: 'stock' } : s
   );
 
-  const symbols = mod.display_symbols || [];
-
-  const addSymbol = (s) => {
-    const sym = (s || '').trim();
+  const addSymbol = (item) => {
+    const sym = String((item && item.symbol) || '').trim();
     if (!sym) return;
+    const type = String((item && item.type) || 'stock').toLowerCase();
     updateActiveProfile((p) => {
       const m = p.modules.find((mm) => mm.module_id === moduleId);
       if (!m) return;
       if (!Array.isArray(m.display_symbols)) m.display_symbols = [];
-      if (!m.display_symbols.includes(sym)) m.display_symbols.push(sym);
+      const exists = m.display_symbols.some((x) =>
+        x && typeof x === 'object'
+          ? x.symbol === sym && x.type === type
+          : x === sym
+      );
+      if (!exists) m.display_symbols.push({ symbol: sym, type });
     });
   };
   const removeSymbol = (i) => {
@@ -950,6 +976,15 @@ function DisplayInspector({ moduleId }) {
       const m = p.modules.find((mm) => mm.module_id === moduleId);
       if (!m || !Array.isArray(m.display_symbols)) return;
       m.display_symbols.splice(i, 1);
+    });
+  };
+  const setSymbolField = (i, patch) => {
+    updateActiveProfile((p) => {
+      const m = p.modules.find((mm) => mm.module_id === moduleId);
+      if (!m || !Array.isArray(m.display_symbols)) return;
+      const cur = m.display_symbols[i];
+      const obj = typeof cur === 'string' ? { symbol: cur, type: 'stock' } : { ...(cur || {}) };
+      m.display_symbols[i] = { ...obj, ...patch };
     });
   };
 
@@ -991,20 +1026,32 @@ function DisplayInspector({ moduleId }) {
             )}
             {symbols.map((s, i) => (
               <div key={i} className="row" style={{ marginBottom: 4, gap: 6 }}>
-                <input className="input mono grow" value={s}
-                  onChange={(e) => updateActiveProfile((p) => {
-                    const m = p.modules.find((mm) => mm.module_id === moduleId);
-                    if (m) m.display_symbols[i] = e.target.value;
-                  })} />
+                <select className="select sm" value={s.type || 'stock'}
+                  style={{ minWidth: 92 }}
+                  onChange={(e) => setSymbolField(i, { type: e.target.value })}>
+                  {MARKET_TYPES.map((t) => (
+                    <option key={t} value={t}>{MARKET_TYPE_LABELS[t]}</option>
+                  ))}
+                </select>
+                <input className="input mono grow" value={s.symbol || ''}
+                  placeholder={MARKET_TYPE_PLACEHOLDERS[s.type] || ''}
+                  onChange={(e) => setSymbolField(i, { symbol: e.target.value })} />
                 <button className="icon-btn danger" onClick={() => removeSymbol(i)}>✕</button>
               </div>
             ))}
             <div className="row" style={{ gap: 6, marginTop: 6 }}>
               <button className="btn grow" onClick={() => setPickerOpen(true)}>📋 Listeden Ekle</button>
-              <button className="btn ghost sm" onClick={() => addSymbol('')}>＋ Boş satır</button>
+              <button className="btn ghost sm" onClick={() => updateActiveProfile((p) => {
+                const m = p.modules.find((mm) => mm.module_id === moduleId);
+                if (!m) return;
+                if (!Array.isArray(m.display_symbols)) m.display_symbols = [];
+                m.display_symbols.push({ symbol: '', type: 'stock' });
+              })}>
+                ＋ Boş satır
+              </button>
             </div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
-              {SYMBOL_HINTS[mod.display_mode] || ''}
+              Kripto: BTC · Döviz: USD-TRY · Hisse: AAPL/THYAO.IS · Emtia: GC=F (altın), SI=F (gümüş)
             </div>
           </div>
 
@@ -1045,8 +1092,8 @@ function DisplayInspector({ moduleId }) {
       </div>
 
       {pickerOpen && (
-        <SymbolPickerModal mode={mod.display_mode} onClose={() => setPickerOpen(false)}
-          onPick={(s) => addSymbol(s)} />
+        <SymbolPickerModal onClose={() => setPickerOpen(false)}
+          onPick={(item) => addSymbol(item)} />
       )}
     </>
   );

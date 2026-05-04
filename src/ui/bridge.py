@@ -367,23 +367,30 @@ class Bridge(QObject):
             return False
         self._push_clock()
 
-        # Update market-data target when display mode changes. Both
-        # display_symbols (new array form) and display_symbol (legacy
-        # single value) are accepted.
-        if mode in ("crypto", "currency", "stock"):
-            symbols = main_mod.get("display_symbols") or []
-            if not symbols and main_mod.get("display_symbol"):
-                symbols = [main_mod["display_symbol"]]
-            symbols = [str(s).strip() for s in symbols if str(s).strip()]
+        # Update market-data target when display mode changes. Symbols
+        # now carry their own type ({symbol, type}); legacy modes and
+        # plain-string lists are migrated on-the-fly.
+        legacy_mode = mode if mode in ("crypto", "currency", "stock") else None
+        if mode == "market" or legacy_mode is not None:
+            raw = main_mod.get("display_symbols") or []
+            if not raw and main_mod.get("display_symbol"):
+                raw = [main_mod["display_symbol"]]
+            items: list = []
+            for it in raw:
+                if isinstance(it, dict):
+                    sym = str(it.get("symbol", "")).strip()
+                    kind = str(it.get("type") or legacy_mode or "stock").lower()
+                else:
+                    sym = str(it or "").strip()
+                    kind = legacy_mode or "stock"
+                if sym:
+                    items.append({"symbol": sym, "type": kind})
             interval = max(2, int(main_mod.get("display_rotate_seconds") or 5))
-            if symbols:
-                self._market_target = {
-                    "mode": mode, "symbols": symbols, "interval": interval,
-                }
+            if items:
+                self._market_target = {"items": items, "interval": interval}
                 self._market_index = 0
                 self._market_rotate_timer.setInterval(interval * 1000)
-                # Single symbol → no rotation needed; just fetch once.
-                if len(symbols) > 1:
+                if len(items) > 1:
                     self._market_rotate_timer.start()
                 else:
                     self._market_rotate_timer.stop()
@@ -399,20 +406,20 @@ class Bridge(QObject):
     def _rotate_market(self) -> None:
         if not self._market_target:
             return
-        syms = self._market_target.get("symbols") or []
-        if len(syms) <= 1:
+        items = self._market_target.get("items") or []
+        if len(items) <= 1:
             return
-        self._market_index = (self._market_index + 1) % len(syms)
+        self._market_index = (self._market_index + 1) % len(items)
         self._fetch_market()
 
     def _fetch_market(self) -> None:
         if not self._market_target:
             return
-        syms = self._market_target.get("symbols") or []
-        if not syms:
+        items = self._market_target.get("items") or []
+        if not items:
             return
-        idx = self._market_index % len(syms)
-        worker = MarketFetchWorker(self._market_target["mode"], syms[idx])
+        item = items[self._market_index % len(items)]
+        worker = MarketFetchWorker(item.get("type", "stock"), item.get("symbol", ""))
         worker.result.connect(self._on_market_data)
         worker.finished.connect(
             lambda w=worker: self._market_workers.remove(w)
@@ -431,6 +438,7 @@ class Bridge(QObject):
                 "value": data.get("value", ""),
                 "change": data.get("change", ""),
                 "currency": data.get("currency", ""),
+                "category": data.get("category", ""),
             })
         except Exception:
             pass
@@ -455,9 +463,21 @@ class Bridge(QObject):
 
     @pyqtSlot(str, result=str)
     def list_market_symbols(self, mode: str) -> str:
-        """Return JSON list of {symbol, name} for the given market mode."""
-        items = SYMBOL_CATALOG.get(mode, [])
-        return json.dumps([{"symbol": s, "name": n} for s, n in items])
+        """Return JSON list of {symbol, name, type} for the given mode.
+
+        For the unified `market` mode, returns every category merged so
+        the picker can show category tabs from a single payload.
+        """
+        if mode in (None, "", "market"):
+            out = []
+            for kind, entries in SYMBOL_CATALOG.items():
+                for s, n in entries:
+                    out.append({"symbol": s, "name": n, "type": kind})
+            return json.dumps(out)
+        entries = SYMBOL_CATALOG.get(mode, [])
+        return json.dumps(
+            [{"symbol": s, "name": n, "type": mode} for s, n in entries]
+        )
 
     @pyqtSlot(result=int)
     def get_system_volume(self) -> int:

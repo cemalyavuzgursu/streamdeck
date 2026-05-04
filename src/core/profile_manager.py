@@ -3,7 +3,9 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from src.utils.constants import PROFILES_DIR, ACTION_NONE, DISPLAY_CLOCK
+from src.utils.constants import (
+    PROFILES_DIR, ACTION_NONE, DISPLAY_CLOCK, DISPLAY_MARKET, LEGACY_MARKET_MODES,
+)
 
 
 class ButtonConfig:
@@ -62,6 +64,9 @@ class ModuleConfig:
         self.encoders: List[EncoderConfig] = [EncoderConfig() for _ in range(encoder_count)]
         self.display_mode: str = DISPLAY_CLOCK
         self.display_custom_text: str = ""
+        self.display_symbols: list = []
+        self.display_rotate_seconds: int = 5
+        self.display_invert: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +80,9 @@ class ModuleConfig:
             "encoders": [e.to_dict() for e in self.encoders],
             "display_mode": self.display_mode,
             "display_custom_text": self.display_custom_text,
+            "display_symbols": list(self.display_symbols),
+            "display_rotate_seconds": self.display_rotate_seconds,
+            "display_invert": self.display_invert,
         }
 
     @classmethod
@@ -97,6 +105,31 @@ class ModuleConfig:
                 c.encoders[i] = EncoderConfig.from_dict(enc)
         c.display_mode = d.get("display_mode", DISPLAY_CLOCK)
         c.display_custom_text = d.get("display_custom_text", "")
+        c.display_rotate_seconds = max(2, int(d.get("display_rotate_seconds") or 5))
+        c.display_invert = bool(d.get("display_invert", False))
+
+        # ── Migration ──
+        # Old format: display_mode in {crypto, currency, stock} with a
+        # parallel list of plain-string symbols. Collapse into the new
+        # unified `market` mode where each symbol carries its type.
+        legacy_mode = c.display_mode if c.display_mode in LEGACY_MARKET_MODES else None
+        raw_symbols = d.get("display_symbols")
+        if raw_symbols is None and d.get("display_symbol"):
+            raw_symbols = [d.get("display_symbol")]
+        symbols: list = []
+        for item in (raw_symbols or []):
+            if isinstance(item, dict):
+                sym = str(item.get("symbol", "")).strip()
+                kind = str(item.get("type") or legacy_mode or "stock").lower()
+                if sym:
+                    symbols.append({"symbol": sym, "type": kind})
+            else:
+                sym = str(item or "").strip()
+                if sym:
+                    symbols.append({"symbol": sym, "type": legacy_mode or "stock"})
+        c.display_symbols = symbols
+        if legacy_mode is not None:
+            c.display_mode = DISPLAY_MARKET
         return c
 
 

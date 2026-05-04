@@ -48,17 +48,21 @@ const DISPLAY_CLOCK = 'clock';
 const DISPLAY_PROFILE = 'profile_name';
 const DISPLAY_VOLUME = 'volume';
 const DISPLAY_CUSTOM = 'custom_text';
-const DISPLAY_CRYPTO = 'crypto';
-const DISPLAY_CURRENCY = 'currency';
-const DISPLAY_STOCK = 'stock';
+const DISPLAY_MARKET = 'market';
+const LEGACY_MARKET_MODES = new Set(['crypto', 'currency', 'stock']);
 const DISPLAY_MODES = {
   [DISPLAY_CLOCK]: 'Saat',
   [DISPLAY_PROFILE]: 'Aktif Profil',
   [DISPLAY_VOLUME]: 'Ses Seviyesi',
   [DISPLAY_CUSTOM]: 'Özel Metin',
-  [DISPLAY_CRYPTO]: 'Kripto',
-  [DISPLAY_CURRENCY]: 'Döviz',
-  [DISPLAY_STOCK]: 'Hisse',
+  [DISPLAY_MARKET]: 'Piyasalar',
+};
+
+const MARKET_TYPE_LABELS = {
+  crypto: 'Kripto',
+  currency: 'Döviz',
+  stock: 'Hisse',
+  commodity: 'Emtia',
 };
 
 const STORE_KEY = 'macropad-state-v1';
@@ -127,10 +131,27 @@ function normaliseModule(m) {
   if (!m) return m;
   if (m.display_mode == null) m.display_mode = DISPLAY_CLOCK;
   if (m.display_custom_text == null) m.display_custom_text = '';
-  // Migrate single legacy display_symbol → array form.
-  if (!Array.isArray(m.display_symbols)) {
-    m.display_symbols = m.display_symbol ? [m.display_symbol] : [];
-  }
+
+  // Migrate legacy modes (crypto/currency/stock) and string-list
+  // symbols into the unified market mode where each symbol carries
+  // its own type. Keep this idempotent — already-typed entries pass
+  // through untouched.
+  const legacyMode = LEGACY_MARKET_MODES.has(m.display_mode) ? m.display_mode : null;
+  let raw = m.display_symbols;
+  if (!Array.isArray(raw)) raw = m.display_symbol ? [m.display_symbol] : [];
+  m.display_symbols = raw
+    .map((it) => {
+      if (it && typeof it === 'object') {
+        const sym = String(it.symbol || '').trim();
+        const type = String(it.type || legacyMode || 'stock').toLowerCase();
+        return sym ? { symbol: sym, type } : null;
+      }
+      const sym = String(it || '').trim();
+      return sym ? { symbol: sym, type: legacyMode || 'stock' } : null;
+    })
+    .filter(Boolean);
+  if (legacyMode) m.display_mode = DISPLAY_MARKET;
+
   if (m.display_rotate_seconds == null) m.display_rotate_seconds = 5;
   if (m.display_invert == null) m.display_invert = false;
   if (!Array.isArray(m.buttons)) m.buttons = [];
@@ -216,6 +237,6 @@ window.MP = {
   ACTION_LABELS, ACTION_GLYPHS, ACTION_SHORT,
   MEDIA_ACTIONS,
   DISPLAY_CLOCK, DISPLAY_PROFILE, DISPLAY_VOLUME, DISPLAY_CUSTOM,
-  DISPLAY_CRYPTO, DISPLAY_CURRENCY, DISPLAY_STOCK, DISPLAY_MODES,
+  DISPLAY_MARKET, MARKET_TYPE_LABELS, DISPLAY_MODES,
   uid, newButton, newEncoder, newModule, newProfile,
 };

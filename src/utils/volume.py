@@ -1,7 +1,7 @@
 """Read the current Windows master volume level (0-100).
 
-Uses pycaw + the IAudioEndpointVolume COM interface. Returns -1 on
-non-Windows or any failure so the firmware can show "?".
+Uses pycaw's high-level AudioDevice wrapper. Returns -1 on non-Windows
+or any failure so the firmware can show "?".
 """
 import sys
 
@@ -10,20 +10,12 @@ def get_volume_pct() -> int:
     if sys.platform != "win32":
         return -1
     try:
-        from ctypes import cast, POINTER
-        from comtypes import CLSCTX_ALL
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from pycaw.pycaw import AudioUtilities
 
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(
-            IAudioEndpointVolume._iid_, CLSCTX_ALL, None
-        )
-        volume = cast(interface, POINTER(IAudioEndpointVolume))
-        scalar = volume.GetMasterVolumeLevelScalar()
-        # If the system is muted, treat as 0 so the bar matches what
-        # the user actually hears.
-        if volume.GetMute():
+        device = AudioUtilities.GetSpeakers()
+        endpoint = device.EndpointVolume
+        if endpoint.GetMute():
             return 0
-        return int(round(scalar * 100))
+        return int(round(endpoint.GetMasterVolumeLevelScalar() * 100))
     except Exception:
         return -1

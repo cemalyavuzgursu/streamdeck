@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "MacroPad Configurator"
-APP_VERSION = "1.17.0"
+APP_VERSION = "1.18.0"
 
 if sys.platform == "win32":
     APPDATA_DIR = Path(os.environ.get("APPDATA", "~")) / "MacroPad"
@@ -51,12 +51,17 @@ DISPLAY_CLOCK = "clock"
 DISPLAY_PROFILE = "profile_name"
 DISPLAY_VOLUME = "volume"
 DISPLAY_CUSTOM = "custom_text"
+DISPLAY_MARKET = "market"
+
+# Legacy modes kept only for migration of old saved profiles.
+LEGACY_MARKET_MODES = {"crypto", "currency", "stock"}
 
 DISPLAY_MODES = {
     DISPLAY_CLOCK: "Saat",
     DISPLAY_PROFILE: "Aktif Profil Adı",
     DISPLAY_VOLUME: "Ses Seviyesi",
     DISPLAY_CUSTOM: "Özel Metin",
+    DISPLAY_MARKET: "Piyasalar",
 }
 
 STYLE_DARK = """

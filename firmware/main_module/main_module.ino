@@ -33,6 +33,8 @@ constexpr const char* MODE_CLOCK    = "clock";
 constexpr const char* MODE_PROFILE  = "profile_name";
 constexpr const char* MODE_VOLUME   = "volume";
 constexpr const char* MODE_CUSTOM   = "custom_text";
+constexpr const char* MODE_MARKET   = "market";
+// Legacy modes — kept for backward compatibility with old PC builds.
 constexpr const char* MODE_CRYPTO   = "crypto";
 constexpr const char* MODE_CURRENCY = "currency";
 constexpr const char* MODE_STOCK    = "stock";
@@ -52,10 +54,11 @@ String customText   = "";
 String clockTime    = "--:--";
 String clockDate    = "";
 int    volumeLevel  = -1;             // -1 = bilinmiyor
-String marketLabel  = "";
-String marketValue  = "—";
-String marketChange = "";
+String marketLabel    = "";
+String marketValue    = "—";
+String marketChange   = "";
 String marketCurrency = "";
+String marketCategory = "";  // crypto / currency / stock / commodity
 bool   inverted     = false;
 
 bool btnState[BTN_COUNT] = {false};
@@ -128,10 +131,16 @@ void drawCustom() {
 void drawMarket() {
   oled.clearBuffer();
   oled.setFont(u8g2_font_5x7_tf);
+  // Per-symbol category (sent with each market payload) drives the
+  // top-left label — so a single `market` mode can rotate KRIPTO ↔
+  // DOVIZ ↔ HISSE ↔ EMTIA per tick. Falls back to displayMode for
+  // legacy clients that still set crypto/currency/stock as the mode.
   const char* topLabel = "PIYASA";
-  if (displayMode == MODE_CRYPTO)   topLabel = "KRIPTO";
-  else if (displayMode == MODE_CURRENCY) topLabel = "DOVIZ";
-  else if (displayMode == MODE_STOCK)    topLabel = "HISSE";
+  const String& cat = marketCategory.length() ? marketCategory : displayMode;
+  if      (cat == "crypto")    topLabel = "KRIPTO";
+  else if (cat == "currency")  topLabel = "DOVIZ";
+  else if (cat == "stock")     topLabel = "HISSE";
+  else if (cat == "commodity") topLabel = "EMTIA";
   oled.drawStr(2, 9, topLabel);
 
   // Symbol top-right
@@ -165,7 +174,8 @@ void drawScreen() {
   if (displayMode == MODE_CLOCK)             drawClock();
   else if (displayMode == MODE_VOLUME)       drawVolume();
   else if (displayMode == MODE_CUSTOM)       drawCustom();
-  else if (displayMode == MODE_CRYPTO ||
+  else if (displayMode == MODE_MARKET ||
+           displayMode == MODE_CRYPTO ||
            displayMode == MODE_CURRENCY ||
            displayMode == MODE_STOCK)        drawMarket();
   else                                       drawProfile();
@@ -233,7 +243,9 @@ void handleMarket(JsonVariant root) {
   marketValue    = String((const char*)(root["value"] | "—"));
   marketChange   = String((const char*)(root["change"] | ""));
   marketCurrency = String((const char*)(root["currency"] | ""));
-  if (displayMode == MODE_CRYPTO ||
+  marketCategory = String((const char*)(root["category"] | ""));
+  if (displayMode == MODE_MARKET ||
+      displayMode == MODE_CRYPTO ||
       displayMode == MODE_CURRENCY ||
       displayMode == MODE_STOCK) {
     drawScreen();
