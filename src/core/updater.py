@@ -228,12 +228,16 @@ class Updater(QObject):
         bat = (
             "@echo off\n"
             "title MacroPad Updater\n"
-            "echo Eski surum kapanmasi bekleniyor...\n"
-            "timeout /t 3 /nobreak >nul\n"
+            "echo Eski surum kapatiliyor...\n"
+            ":: Force-kill any lingering MacroPad processes — graceful\n"
+            ":: shutdown can drag on with the tray icon + Qt timers and\n"
+            ":: leave the exe locked for 20+ seconds. Just yank it.\n"
+            "taskkill /F /IM MacroPad.exe /T >nul 2>&1\n"
+            "timeout /t 2 /nobreak >nul\n"
             "\n"
             f'set "NEW_FILE={new_exe_path}"\n'
             f'set "CUR_FILE={current_exe}"\n'
-            "set RETRIES=20\n"
+            "set RETRIES=30\n"
             "\n"
             ":: Final sanity check inside the bat — defence in depth.\n"
             ":: PyInstaller exe is ~120MB; anything under 100MB is bogus.\n"
@@ -281,4 +285,9 @@ class Updater(QObject):
         # Give the spawned cmd a moment to start before we yank ourselves.
         import time
         time.sleep(0.4)
-        sys.exit(0)
+        # os._exit bypasses Qt cleanup + Python finalizers. sys.exit
+        # was leaving the tray-bound app alive long enough that the
+        # bat's copy attempts kept hitting a locked file and giving up.
+        # We've already started the bat which will replace this exe
+        # anyway, so a clean shutdown buys us nothing here.
+        os._exit(0)
