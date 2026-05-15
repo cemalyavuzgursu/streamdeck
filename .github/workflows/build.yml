@@ -17,7 +17,6 @@ jobs:
   build-windows:
     name: Build Windows EXE
     runs-on: windows-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,7 +36,7 @@ jobs:
       - name: Update version.json
         shell: python
         run: |
-          import json, os, re
+          import json, os
           tag = os.environ.get('GITHUB_REF_NAME', 'v1.0.0').lstrip('v')
           path = 'version.json'
           with open(path) as f:
@@ -83,20 +82,95 @@ jobs:
           path: dist/MacroPad.exe
           retention-days: 30
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+  build-firmware:
+    name: Compile ESP32-C3 Firmware
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 board package
+        run: |
+          arduino-cli config init
+          arduino-cli config set board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.0.7
+
+      - name: Install Arduino libraries
+        run: |
+          arduino-cli lib install "ArduinoJson@6.21.5"
+          arduino-cli lib install "U8g2"
+
+      - name: Compile firmware
+        run: |
+          mkdir -p firmware/build
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc \
+            --output-dir firmware/build \
+            firmware/main_module
+
+      - name: Create merged firmware binary
+        run: |
+          pip install esptool
+          BOOT_APP=$(find ~/.arduino15/packages/esp32/hardware/esp32/*/tools/partitions/boot_app0.bin 2>/dev/null | head -1)
+          esptool.py --chip esp32c3 merge_bin \
+            -o firmware/build/firmware.bin \
+            --flash_mode dio \
+            --flash_freq 80m \
+            --flash_size 4MB \
+            0x0    firmware/build/main_module.ino.bootloader.bin \
+            0x8000 firmware/build/main_module.ino.partitions.bin \
+            0xe000 "$BOOT_APP" \
+            0x10000 firmware/build/main_module.ino.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-bin
+          path: firmware/build/firmware.bin
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-firmware]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MacroPad-windows
+          path: release-assets
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-bin
+          path: release-assets
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/MacroPad.exe
+          files: |
+            release-assets/MacroPad.exe
+            release-assets/firmware.bin
           generate_release_notes: true
           body: |
             ## MacroPad Configurator ${{ github.ref_name }}
 
             ### Kurulum
-            `MacroPad.exe` dosyasını indirip çalıştırın — kurulum gerekmez.
+            1. **MacroPad.exe** indir ve çalıştır — kurulum gerekmez (Windows 10/11 64-bit)
+            2. Cihazı USB ile bağla — ESP32-C3 otomatik algılanır
+
+            ### Firmware Güncelleme
+            Uygulamanın **⚡ Flash** menüsünden "GitHub'dan İndir & Flash" seçeneğiyle cihaz firmware'ini güncelle.
 
             ### Gereksinimler
             - Windows 10/11 (64-bit)
-            - ESP32-C3 sürücüsü: [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) veya [CH340](http://www.wch.cn/downloads/CH341SER_EXE.html)
+            - ESP32-C3 USB sürücüsü: [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) veya [CH340](http://www.wch.cn/downloads/CH341SER_EXE.html)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

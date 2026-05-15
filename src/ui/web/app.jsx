@@ -7,6 +7,7 @@ const {
   MEDIA_ACTIONS,
   DISPLAY_CLOCK, DISPLAY_PROFILE, DISPLAY_VOLUME, DISPLAY_CUSTOM,
   DISPLAY_MARKET, MARKET_TYPE_LABELS, DISPLAY_MODES,
+  SYMBOL_CATALOG,
   uid, newButton, newProfile,
 } = window.MP;
 
@@ -101,7 +102,17 @@ function Topbar({ onOpenFlash }) {
         <button className="icon-btn" title="Portları Tara" onClick={() => { refreshPorts(); showToast('Portlar tarandı'); }}>↻</button>
       </div>
 
-      <button className="btn ghost" onClick={onOpenFlash} title="Firmware Güncelle">⚡ Flash</button>
+      <button className="btn ghost" onClick={onOpenFlash} title="Firmware Güncelle"
+        style={{ position: 'relative' }}>
+        ⚡ Flash
+        {state.firmwareAlert && (
+          <span style={{
+            position: 'absolute', top: 2, right: 2,
+            width: 8, height: 8, borderRadius: '50%',
+            background: 'var(--bad)', display: 'block',
+          }} />
+        )}
+      </button>
 
       <button className="btn ghost" title="Uygulama güncellemelerini kontrol et"
         onClick={() => {
@@ -866,15 +877,14 @@ function SymbolPickerModal({ onClose, onPick }) {
   const [tab, setTab] = useState('all');
 
   useEffect(() => {
-    if (!bridge || !bridge.list_market_symbols) {
-      setLoading(false);
-      return;
+    const out = [];
+    for (const [kind, entries] of Object.entries(SYMBOL_CATALOG)) {
+      for (const [symbol, name] of entries) {
+        out.push({ symbol, name, type: kind });
+      }
     }
-    bridge.list_market_symbols('market', (js) => {
-      try { setItems(JSON.parse(js) || []); }
-      catch { setItems([]); }
-      setLoading(false);
-    });
+    setItems(out);
+    setLoading(false);
   }, []);
 
   const f = filter.trim().toLowerCase();
@@ -1213,6 +1223,12 @@ function FlashModal({ onClose }) {
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const [success, setSuccess] = useState(true);
+  const [connectedFwVer, setConnectedFwVer] = useState('');
+
+  useEffect(() => {
+    if (!bridge || !bridge.get_firmware_version) return;
+    bridge.get_firmware_version((v) => setConnectedFwVer(v || ''));
+  }, []);
 
   // Subscribe to bridge flash signals
   useEffect(() => {
@@ -1301,6 +1317,27 @@ function FlashModal({ onClose }) {
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
+          {(state.firmwareAlert || connectedFwVer) && (
+            <div style={{
+              padding: '8px 12px', borderRadius: 8, marginBottom: 10,
+              background: state.firmwareAlert ? 'oklch(0.95 0.06 25)' : 'var(--bg-2)',
+              border: `1px solid ${state.firmwareAlert ? 'var(--bad)' : 'var(--line)'}`,
+              fontSize: 12, fontFamily: 'var(--font-mono)',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              {state.firmwareAlert ? (
+                <>
+                  <span style={{ color: 'var(--bad)', fontWeight: 700 }}>⚠</span>
+                  <span>Firmware güncellem gerekiyor: <b>v{state.firmwareAlert.connected}</b> → <b>v{state.firmwareAlert.required}</b></span>
+                </>
+              ) : (
+                <>
+                  <span style={{ color: 'var(--good)' }}>✓</span>
+                  <span>Bağlı firmware: <b>v{connectedFwVer}</b></span>
+                </>
+              )}
+            </div>
+          )}
           <div className="row" style={{ gap: 8, marginBottom: 12 }}>
             <button className="btn accent grow" disabled={running} onClick={startGithub}>
               🌐 GitHub'dan İndir & Flash
@@ -1582,9 +1619,12 @@ function DiscoveryWatcher() {
             // which is exactly what made the firmware see mode=
             // (default profile_name) no matter what the user picked.
             if (old.display_mode) fresh.display_mode = old.display_mode;
-            if (old.display_custom_text != null) {
-              fresh.display_custom_text = old.display_custom_text;
+            if (old.display_custom_text != null) fresh.display_custom_text = old.display_custom_text;
+            if (Array.isArray(old.display_symbols) && old.display_symbols.length > 0) {
+              fresh.display_symbols = old.display_symbols;
             }
+            if (old.display_rotate_seconds != null) fresh.display_rotate_seconds = old.display_rotate_seconds;
+            if (old.display_invert != null) fresh.display_invert = old.display_invert;
             return fresh;
           });
 
@@ -1696,6 +1736,25 @@ function UpdateWatcher() {
   );
 }
 
+// ───────── Firmware version watcher ─────────
+function FirmwareWatcher() {
+  const { setState, showToast } = useStore();
+
+  useEffect(() => {
+    if (!bridge || !bridge.firmware_outdated) return;
+    const onOutdated = (connected, required) => {
+      setState((s) => ({ ...s, firmwareAlert: { connected, required } }));
+      showToast(`⚡ Firmware güncel değil: v${connected} → v${required}`);
+    };
+    bridge.firmware_outdated.connect(onOutdated);
+    return () => {
+      try { bridge.firmware_outdated.disconnect(onOutdated); } catch {}
+    };
+  }, [setState, showToast]);
+
+  return null;
+}
+
 // ───────── App ─────────
 function App() {
   const { toast } = useStore();
@@ -1714,6 +1773,7 @@ function App() {
       {showAddModule && <AddModuleModal onClose={() => setShowAddModule(false)} />}
       {showFlash && <FlashModal onClose={() => setShowFlash(false)} />}
       {toast && <div className="toast">{toast}</div>}
+      <FirmwareWatcher />
       <UpdateWatcher />
       <DiscoveryWatcher />
       <ActionRouter />

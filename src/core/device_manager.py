@@ -28,6 +28,7 @@ class ModuleInfo:
 
 class SerialWorker(QThread):
     modules_discovered = pyqtSignal(list)
+    firmware_version_received = pyqtSignal(str)
     connection_changed = pyqtSignal(bool, str)
     message_received = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
@@ -102,6 +103,9 @@ class SerialWorker(QThread):
 
         msg_type = data.get("type")
         if msg_type == "modules":
+            fw_ver = str(data.get("firmware_version", ""))
+            if fw_ver:
+                self.firmware_version_received.emit(fw_ver)
             modules = []
             for m in data.get("modules", []):
                 modules.append(
@@ -126,6 +130,7 @@ class DeviceManager(QObject):
     error_occurred = pyqtSignal(str)
     config_sent = pyqtSignal()
     message_received = pyqtSignal(dict)          # any non-modules JSON line
+    firmware_version_received = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -186,6 +191,7 @@ class DeviceManager(QObject):
         self._worker.connection_changed.connect(self._on_connection_changed)
         self._worker.error_occurred.connect(self.error_occurred)
         self._worker.message_received.connect(self.message_received)
+        self._worker.firmware_version_received.connect(self.firmware_version_received)
         self._worker.start()
 
     def disconnect(self):

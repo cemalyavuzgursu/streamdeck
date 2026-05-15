@@ -1,5 +1,6 @@
 """QWebChannel bridge between the React/HTML UI and the Python backend."""
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -19,6 +20,13 @@ from src.utils.foreground import get_foreground_process_name
 
 
 _LAST_CONFIG_PATH = APPDATA_DIR / "last_config.json"
+
+
+def _parse_fw_version(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.lstrip("v").split("."))
+    except ValueError:
+        return (0,)
 
 
 class Bridge(QObject):
@@ -43,6 +51,8 @@ class Bridge(QObject):
     # "Bağlı" / "Bağlı değil" without polling.
     device_connection_changed = pyqtSignal(bool, str)
 
+    firmware_outdated = pyqtSignal(str, str)  # connected_version, required_version
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._device = DeviceManager(self)
@@ -59,6 +69,8 @@ class Bridge(QObject):
         self._cached_profile: Optional[Dict[str, Any]] = self._load_last_config()
         self._all_profiles: list = []
         self._auto_disabled_port: str = ""  # set when user manually disconnects
+        self._connected_fw_version = ""
+        self._device.firmware_version_received.connect(self._on_firmware_version)
 
         # Auto-switch state — last process we evaluated, last manual
         # override timestamp (so a user-driven switch isn't immediately
@@ -115,6 +127,23 @@ class Bridge(QObject):
         self._volume_timer.setInterval(1_000)
         self._volume_timer.timeout.connect(self._push_volume)
         self._volume_timer.start()
+
+    def _on_firmware_version(self, version: str) -> None:
+        self._connected_fw_version = version
+        if not version:
+            return
+        try:
+            from pathlib import Path
+            base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent))
+            vpath = base / "version.json"
+            if vpath.exists():
+                with open(vpath, encoding="utf-8") as f:
+                    data = json.load(f)
+                expected = data.get("firmware_version", "")
+                if expected and _parse_fw_version(version) < _parse_fw_version(expected):
+                    self.firmware_outdated.emit(version, expected)
+        except Exception:
+            pass
 
     # ─────────────── Auto-connect / persistence ───────────────
     def _load_last_config(self) -> Optional[Dict[str, Any]]:
@@ -585,3 +614,7 @@ class Bridge(QObject):
             Updater.apply_update(path)
         self._updater.download_finished.connect(_on_finished)
         self._updater.download_update(url)
+
+    @pyqtSlot(result=str)
+    def get_firmware_version(self) -> str:
+        return self._connected_fw_version

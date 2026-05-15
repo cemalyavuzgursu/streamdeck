@@ -39,6 +39,9 @@ constexpr const char* MODE_CRYPTO   = "crypto";
 constexpr const char* MODE_CURRENCY = "currency";
 constexpr const char* MODE_STOCK    = "stock";
 
+// ─────────────── Firmware version ───────────────
+constexpr const char* FIRMWARE_VERSION = "1.1.0";
+
 // ─────────────── Globals ───────────────
 // 1" OLED'ler genelde SH1106 controller kullanır (SSD1306 değil).
 // SH1106'nın 132x64 RAM'i var, sadece 128 sütunu görünür → SSD1306
@@ -203,6 +206,7 @@ void drawBootScreen(const String& bottom) {
 void sendModules() {
   StaticJsonDocument<256> doc;
   doc["type"] = "modules";
+  doc["firmware_version"] = FIRMWARE_VERSION;
   JsonArray arr = doc.createNestedArray("modules");
   JsonObject m = arr.createNestedObject();
   m["id"] = "main";
