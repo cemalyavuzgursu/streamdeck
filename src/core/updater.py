@@ -27,6 +27,28 @@ def _parse_version(v: str) -> tuple:
         return (0,)
 
 
+def _get_installed_version() -> str:
+    """Read app_version from the bundled version.json (set by CI at build time).
+
+    Falls back to the hardcoded APP_VERSION constant when running from source
+    or if the file cannot be read — both cases where the constant is reliable.
+    """
+    try:
+        import json
+        from pathlib import Path
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent))
+        vpath = base / "version.json"
+        if vpath.exists():
+            with open(vpath, encoding="utf-8") as f:
+                data = json.load(f)
+            v = data.get("app_version", "")
+            if v:
+                return v
+    except Exception:
+        pass
+    return APP_VERSION
+
+
 def _latest_tag_via_redirect(requests_mod) -> Optional[str]:
     """Fetch the latest tag without calling the rate-limited API.
 
@@ -98,7 +120,8 @@ class UpdateChecker(QThread):
             self.error_occurred.emit("Güncelleme bilgisi alınamadı (rate limit veya bağlantı hatası).")
             return
 
-        if _parse_version(latest) > _parse_version(APP_VERSION):
+        installed = _get_installed_version()
+        if _parse_version(latest) > _parse_version(installed):
             self.update_available.emit(latest, url, notes)
         else:
             self.no_update.emit()
