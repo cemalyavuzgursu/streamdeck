@@ -3,7 +3,7 @@ it to the Python backend through QWebChannel."""
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import QUrl, Qt
+from PyQt5.QtCore import QTimer, QUrl, Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineView
@@ -59,6 +59,9 @@ class MainWindow(QMainWindow):
         self._setup_tray()
         self._force_quit = False
 
+        if "--tray" in sys.argv and self._tray:
+            QTimer.singleShot(1500, self._notify_tray_start)
+
     # ─────────────── Tray ───────────────
     def _setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -85,6 +88,15 @@ class MainWindow(QMainWindow):
                 self.hide()
             else:
                 self._show_window()
+
+    def _notify_tray_start(self):
+        if self._tray:
+            self._tray.showMessage(
+                APP_NAME,
+                "Arka planda çalışıyor. Tepsi simgesine tıklayarak açabilirsiniz.",
+                QSystemTrayIcon.Information,
+                3000,
+            )
 
     def _show_window(self):
         self.showNormal()
