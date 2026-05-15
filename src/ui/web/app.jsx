@@ -25,6 +25,12 @@ const bridge = window.MP_BRIDGE;
 function Topbar({ onOpenFlash }) {
   const { state, setState, showToast, activeProfile } = useStore();
   const [ports, setPorts] = useState([{ device: state.selectedPort, label: state.selectedPort, is_esp: false }]);
+  const [appVersion, setAppVersion] = useState('');
+
+  useEffect(() => {
+    if (!bridge || !bridge.get_app_version) return;
+    bridge.get_app_version((v) => { if (v) setAppVersion(v); });
+  }, []);
 
   const refreshPorts = useCallback(() => {
     if (!bridge) {
@@ -83,7 +89,7 @@ function Topbar({ onOpenFlash }) {
         <div className="brand-mark"><span /><span /><span /><span /></div>
         <div>
           MacroPad
-          <span className="sub">  v1.0</span>
+          <span className="sub">  {appVersion ? `v${appVersion}` : 'v?'}</span>
         </div>
       </div>
 

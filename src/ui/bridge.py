@@ -508,6 +508,24 @@ class Bridge(QObject):
             [{"symbol": s, "name": n, "type": mode} for s, n in entries]
         )
 
+    @pyqtSlot(result=str)
+    def get_app_version(self) -> str:
+        """Return the app version from version.json (updated by CI on each release)."""
+        try:
+            from pathlib import Path
+            base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent))
+            vpath = base / "version.json"
+            if vpath.exists():
+                with open(vpath, encoding="utf-8") as f:
+                    data = json.load(f)
+                v = data.get("app_version", "")
+                if v:
+                    return v
+        except Exception:
+            pass
+        from src.utils.constants import APP_VERSION
+        return APP_VERSION
+
     @pyqtSlot(result=int)
     def get_system_volume(self) -> int:
         return get_volume_pct()
